@@ -155,6 +155,15 @@ func (m *Manager) PreFilterStocks(stocks []StockBasicInfo) []StockBasicInfo {
 // RunStrategy 并发执行选股策略（带进度回调和取消支持）
 type KLineDataFetcher func(symbol string) ([]models.KLineData, error)
 
+// StockPredictor 股票预测接口
+type StockPredictor interface {
+	Predict(klines []models.KLineData) *models.PredictionResult
+	IsTrained() bool
+}
+
+// PredictionResult 预测结果（从models层引用）
+type PredictionResult = models.PredictionResult
+
 func (m *Manager) RunStrategy(
 	strategyID models.SelectorStrategy,
 	stocks []StockBasicInfo,
@@ -163,6 +172,7 @@ func (m *Manager) RunStrategy(
 	maxConcurrency int,
 	progressCallback ProgressCallback,
 	cancelChan <-chan struct{},
+	predictor StockPredictor,
 ) []models.SelectorStock {
 	strategy := m.strategies[strategyID]
 	if strategy == nil {
@@ -327,6 +337,16 @@ func (m *Manager) RunStrategy(
 					Amount:        last.Amount,
 					Score:         score,
 					ScoreDetail:   scoreDetail,
+				}
+
+				// AI涨跌预测
+				if predictor != nil && predictor.IsTrained() {
+					if pred := predictor.Predict(klines); pred != nil {
+						stockResult.PredDirection = pred.Direction
+						stockResult.PredReturn = pred.Return
+						stockResult.PredConfidence = pred.Confidence
+						stockResult.PredSignal = pred.Signal
+					}
 				}
 
 				mu.Lock()

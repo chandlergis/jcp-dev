@@ -444,6 +444,24 @@ export const SelectorPanel: React.FC<SelectorPanelProps> = ({ onStockSelect, onS
                       }`}>
                         {stock.symbol}
                       </span>
+                      {/* AI预测信号 */}
+                      {stock.predSignal && (
+                        <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                          stock.predSignal === '强买入' 
+                            ? 'bg-green-500/20 text-green-400' 
+                            : stock.predSignal === '买入'
+                              ? 'bg-green-500/10 text-green-500'
+                              : stock.predSignal === '强卖出'
+                                ? 'bg-red-500/20 text-red-400'
+                                : stock.predSignal === '卖出'
+                                  ? 'bg-red-500/10 text-red-500'
+                                  : 'bg-slate-500/10 text-slate-400'
+                        }`}
+                        title={`预测${stock.predDirection} ${Math.abs(stock.predReturn || 0).toFixed(2)}%, 置信度${((stock.predConfidence || 0) * 100).toFixed(0)}%`}
+                        >
+                          {stock.predSignal}
+                        </span>
+                      )}
                     </div>
                     {stock.industry && (
                       <span className={`text-xs px-1.5 py-0.5 rounded mt-0.5 inline-block ${

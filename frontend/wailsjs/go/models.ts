@@ -1584,6 +1584,10 @@ export namespace models {
 	    amount: number;
 	    score: number;
 	    scoreDetail: string;
+	    predDirection?: string;
+	    predReturn?: number;
+	    predConfidence?: number;
+	    predSignal?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new SelectorStock(source);
@@ -1601,6 +1605,10 @@ export namespace models {
 	        this.amount = source["amount"];
 	        this.score = source["score"];
 	        this.scoreDetail = source["scoreDetail"];
+	        this.predDirection = source["predDirection"];
+	        this.predReturn = source["predReturn"];
+	        this.predConfidence = source["predConfidence"];
+	        this.predSignal = source["predSignal"];
 	    }
 	}
 	export class SelectorRecord {

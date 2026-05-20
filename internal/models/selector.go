@@ -51,6 +51,11 @@ type SelectorStock struct {
 	Amount        float64 `json:"amount"`
 	Score         float64 `json:"score"`          // 综合得分 0-100
 	ScoreDetail   string  `json:"scoreDetail"`    // 得分详情
+	// AI预测字段
+	PredDirection  string  `json:"predDirection,omitempty"`  // "涨" / "跌"
+	PredReturn     float64 `json:"predReturn,omitempty"`     // 预测收益率(%)
+	PredConfidence float64 `json:"predConfidence,omitempty"` // 预测置信度 0-1
+	PredSignal     string  `json:"predSignal,omitempty"`     // "强买入"/"买入"/"观望"/"卖出"/"强卖出"
 }
 
 // SelectorFilterParams 选股过滤参数
@@ -73,4 +78,12 @@ type SelectorRecord struct {
 // SelectorRecordsStore 选股记录存储结构
 type SelectorRecordsStore struct {
 	Records []SelectorRecord `json:"records"`
+}
+
+// PredictionResult 预测结果
+type PredictionResult struct {
+	Direction  string  `json:"direction"`  // "涨" / "跌"
+	Return     float64 `json:"return"`     // 预测收益率(%)
+	Confidence float64 `json:"confidence"` // 置信度 0-1
+	Signal     string  `json:"signal"`     // 信号等级
 }

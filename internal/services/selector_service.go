@@ -19,6 +19,7 @@ type SelectorService struct {
 	dataDir    string
 	manager    *selector.Manager
 	marketSvc  *MarketService
+	predictor  *PredictionService
 	klineCache *KLineCacheService
 	mu         sync.RWMutex
 	store      *models.SelectorRecordsStore
@@ -32,11 +33,16 @@ func NewSelectorService(dataDir string, marketSvc *MarketService) *SelectorServi
 		dataDir:    dataDir,
 		manager:    selector.NewManager(),
 		marketSvc:  marketSvc,
+		predictor:  NewPredictionService(dataDir),
 		klineCache: NewKLineCacheService(dataDir),
 		store:      &models.SelectorRecordsStore{Records: []models.SelectorRecord{}},
 		cancelChan: make(chan struct{}),
 	}
 	s.load()
+
+	// 初始化预测模型（优先从文件加载，否则后台训练）
+	s.predictor.Init(marketSvc)
+
 	return s
 }
 
@@ -162,7 +168,7 @@ func (s *SelectorService) RunSelector(strategyID models.SelectorStrategy, priceM
 
 	// 执行选股 - 并发数10
 	start := time.Now()
-	results := s.manager.RunStrategy(strategyID, filtered, fetcher, priceMin, priceMax, 10, progressCallback, s.cancelChan)
+	results := s.manager.RunStrategy(strategyID, filtered, fetcher, priceMin, priceMax, 10, progressCallback, s.cancelChan, s.predictor)
 	elapsed := time.Since(start)
 
 	// 保存缓存到文件
@@ -288,4 +294,21 @@ func (s *SelectorService) GetCacheStats() (total int, todayCount int) {
 // ClearExpiredCache 清理过期缓存
 func (s *SelectorService) ClearExpiredCache(days int) int {
 	return s.klineCache.ClearExpired(days)
+}
+
+// getTrainStockCodes 从候选股票中选取训练用的股票代码
+func (s *SelectorService) getTrainStockCodes(stocks []selector.StockBasicInfo, maxCount int) []string {
+	if len(stocks) <= maxCount {
+		codes := make([]string, len(stocks))
+		for i, st := range stocks {
+			codes[i] = st.Symbol
+		}
+		return codes
+	}
+	codes := make([]string, 0, maxCount)
+	step := len(stocks) / maxCount
+	for i := 0; i < len(stocks) && len(codes) < maxCount; i += step {
+		codes = append(codes, stocks[i].Symbol)
+	}
+	return codes
 }

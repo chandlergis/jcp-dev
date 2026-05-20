@@ -341,6 +341,10 @@ export interface SelectorStock {
   amount: number;
   score: number;
   scoreDetail: string;
+  predDirection?: string;
+  predReturn?: number;
+  predConfidence?: number;
+  predSignal?: string;
 }
 
 export interface SelectorFilterParams {

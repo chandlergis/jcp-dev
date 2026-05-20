@@ -20,6 +20,7 @@ import (
 	"github.com/run-bigpig/jcp/internal/openclaw"
 	"github.com/run-bigpig/jcp/internal/pkg/paths"
 	"github.com/run-bigpig/jcp/internal/pkg/proxy"
+	"github.com/run-bigpig/jcp/internal/selector"
 	"github.com/run-bigpig/jcp/internal/services"
 	"github.com/run-bigpig/jcp/internal/services/hottrend"
 
@@ -48,6 +49,8 @@ type App struct {
 	meetingService    *meeting.Service
 	sessionService    *services.SessionService
 	strategyService   *services.StrategyService
+	selectorService   *services.SelectorService
+	trainingService   *services.TrainingService
 	agentContainer    *agent.Container
 	toolRegistry      *tools.Registry
 	mcpManager        *mcp.Manager
@@ -157,6 +160,12 @@ func NewApp() *App {
 	// 初始化策略服务
 	strategyService := services.NewStrategyService(dataDir)
 
+	// 初始化选股服务
+	selectorService := services.NewSelectorService(dataDir, marketService)
+
+	// 初始化训练服务
+	trainingService := services.NewTrainingService(dataDir, marketService)
+
 	// 初始化Agent容器（直接从StrategyService获取数据）
 	agentContainer := agent.NewContainer()
 	agentContainer.LoadAgents(strategyService.GetAllAgents())
@@ -199,6 +208,8 @@ func NewApp() *App {
 		meetingService:      meetingService,
 		sessionService:      sessionService,
 		strategyService:     strategyService,
+		selectorService:     selectorService,
+		trainingService:     trainingService,
 		agentContainer:      agentContainer,
 		toolRegistry:        toolRegistry,
 		mcpManager:          mcpManager,
@@ -1701,4 +1712,255 @@ func (a *App) NotifyFrontendReady() {
 	if a.marketPusher != nil {
 		a.marketPusher.SetReady()
 	}
+}
+
+// ========== Selector API ==========
+
+// GetSelectorStrategies 获取选股策略列表
+func (a *App) GetSelectorStrategies() []models.SelectorStrategyInfo {
+	if a.selectorService == nil {
+		return nil
+	}
+	return a.selectorService.GetStrategyList()
+}
+
+// SelectorRunRequest 选股执行请求
+type SelectorRunRequest struct {
+	Strategy models.SelectorStrategy `json:"strategy"`
+	PriceMin float64                 `json:"priceMin"`
+	PriceMax float64                 `json:"priceMax"`
+}
+
+// RunSelector 执行选股（预览）
+func (a *App) RunSelector(req SelectorRunRequest) *models.SelectorResult {
+	if a.selectorService == nil {
+		return nil
+	}
+	// 默认价格范围
+	if req.PriceMin <= 0 {
+		req.PriceMin = 3.0
+	}
+	if req.PriceMax <= 0 {
+		req.PriceMax = 9999.0
+	}
+
+	// 进度回调：通过事件推送到前端
+	progressCallback := func(progress selector.ProgressInfo) {
+		runtime.EventsEmit(a.ctx, "selector:progress", progress)
+	}
+
+	return a.selectorService.RunSelector(req.Strategy, req.PriceMin, req.PriceMax, progressCallback)
+}
+
+// SaveSelectorRecord 保存选股记录
+func (a *App) SaveSelectorRecord(result *models.SelectorResult) string {
+	if a.selectorService == nil {
+		return "service not ready"
+	}
+	if err := a.selectorService.SaveSelectorRecord(result); err != nil {
+		return err.Error()
+	}
+	return "success"
+}
+
+// GetSelectorRecords 获取选股记录列表
+func (a *App) GetSelectorRecords() []models.SelectorRecord {
+	if a.selectorService == nil {
+		return nil
+	}
+	return a.selectorService.GetSelectorRecords()
+}
+
+// GetSelectorRecordsByDate 按日期获取选股记录
+func (a *App) GetSelectorRecordsByDate(date string) []models.SelectorRecord {
+	if a.selectorService == nil {
+		return nil
+	}
+	return a.selectorService.GetSelectorRecordsByDate(date)
+}
+
+// DeleteSelectorRecord 删除选股记录
+func (a *App) DeleteSelectorRecord(date string, strategy models.SelectorStrategy) string {
+	if a.selectorService == nil {
+		return "service not ready"
+	}
+	if err := a.selectorService.DeleteSelectorRecord(date, strategy); err != nil {
+		return err.Error()
+	}
+	return "success"
+}
+
+// AddStocksToWatchlist 批量添加股票到自选股
+func (a *App) AddStocksToWatchlist(stocks []models.Stock) []string {
+	log.Info("AddStocksToWatchlist: 收到 %d 只股票", len(stocks))
+	var added []string
+	for _, stock := range stocks {
+		if err := a.configService.AddToWatchlist(stock); err == nil {
+			added = append(added, stock.Symbol)
+			log.Info("AddStocksToWatchlist: 成功添加 %s (%s)", stock.Name, stock.Symbol)
+			// 同步添加到推送订阅
+			if a.marketPusher != nil {
+				a.marketPusher.AddSubscription(stock.Symbol)
+			}
+		} else {
+			log.Error("AddStocksToWatchlist: 添加 %s 失败: %v", stock.Symbol, err)
+		}
+	}
+	log.Info("AddStocksToWatchlist: 完成，共添加 %d 只", len(added))
+	return added
+}
+
+// CancelSelector 取消选股
+func (a *App) CancelSelector() {
+	if a.selectorService != nil {
+		a.selectorService.CancelSelector()
+	}
+}
+
+// IsSelectorRunning 选股是否正在运行
+func (a *App) IsSelectorRunning() bool {
+	if a.selectorService == nil {
+		return false
+	}
+	return a.selectorService.IsRunning()
+}
+
+// GetSelectorCacheStats 获取选股缓存统计
+func (a *App) GetSelectorCacheStats() map[string]int {
+	if a.selectorService == nil {
+		return map[string]int{"total": 0, "today": 0}
+	}
+	total, today := a.selectorService.GetCacheStats()
+	return map[string]int{"total": total, "today": today}
+}
+
+// ========== Training API ==========
+
+// CreateTrainingSession 创建训练会话
+func (a *App) CreateTrainingSession() *models.TrainingSession {
+	if a.trainingService == nil {
+		return nil
+	}
+	session, err := a.trainingService.CreateSession()
+	if err != nil {
+		log.Error("创建训练会话失败: %v", err)
+		return nil
+	}
+	return session
+}
+
+// GetTrainingSession 获取训练会话
+func (a *App) GetTrainingSession(sessionID string) *models.TrainingSession {
+	if a.trainingService == nil {
+		return nil
+	}
+	return a.trainingService.GetSession(sessionID)
+}
+
+// GetTrainingKlines 获取训练K线数据（可见的）
+func (a *App) GetTrainingKlines(sessionID string) []models.KLineData {
+	if a.trainingService == nil {
+		return nil
+	}
+	return a.trainingService.GetVisibleKlines(sessionID)
+}
+
+// TrainingTradeRequest 交易请求
+type TrainingTradeRequest struct {
+	SessionID     string              `json:"sessionId"`
+	Action        models.TradeAction  `json:"action"`
+	PositionLevel models.PositionLevel `json:"positionLevel"`
+}
+
+// ExecuteTrainingTrade 执行训练交易
+func (a *App) ExecuteTrainingTrade(req TrainingTradeRequest) *models.TradeRecord {
+	if a.trainingService == nil {
+		return nil
+	}
+	trade, err := a.trainingService.ExecuteTrade(req.SessionID, req.Action, req.PositionLevel)
+	if err != nil {
+		log.Error("执行训练交易失败: %v", err)
+		return nil
+	}
+	return trade
+}
+
+// NextTrainingDay 推进到下一天
+func (a *App) NextTrainingDay(sessionID string) *models.KLineData {
+	if a.trainingService == nil {
+		return nil
+	}
+	kline, finished, err := a.trainingService.NextDay(sessionID)
+	if err != nil {
+		log.Error("推进训练日期失败: %v", err)
+		return nil
+	}
+	if finished {
+		log.Info("训练结束: %s", sessionID)
+	}
+	return kline
+}
+
+// AbortTraining 中止训练
+func (a *App) AbortTraining(sessionID string) string {
+	if a.trainingService == nil {
+		return "service not ready"
+	}
+	if err := a.trainingService.AbortSession(sessionID); err != nil {
+		return err.Error()
+	}
+	return "success"
+}
+
+// GetTrainingTrades 获取训练交易记录
+func (a *App) GetTrainingTrades(sessionID string) []models.TradeRecord {
+	if a.trainingService == nil {
+		return nil
+	}
+	return a.trainingService.GetTrades(sessionID)
+}
+
+// GetTrainingCapitalCurve 获取训练资金曲线
+func (a *App) GetTrainingCapitalCurve(sessionID string) []models.CapitalSnapshot {
+	if a.trainingService == nil {
+		return nil
+	}
+	return a.trainingService.GetCapitalCurve(sessionID)
+}
+
+// GetTrainingStats 获取训练统计
+func (a *App) GetTrainingStats(sessionID string) map[string]interface{} {
+	if a.trainingService == nil {
+		return nil
+	}
+	return a.trainingService.GetStats(sessionID)
+}
+
+// GetTrainingRecords 获取训练记录列表
+func (a *App) GetTrainingRecords() []models.TrainingRecord {
+	if a.trainingService == nil {
+		return nil
+	}
+	return a.trainingService.GetTrainingRecords()
+}
+
+// GetBestTrainingRecord 获取最佳训练记录
+func (a *App) GetBestTrainingRecord() *models.TrainingRecord {
+	if a.trainingService == nil {
+		return nil
+	}
+	return a.trainingService.GetBestRecord()
+}
+
+// GetMilestoneInfo 获取里程碑信息
+func (a *App) GetMilestoneInfo(milestoneType models.MilestoneType) *models.MilestoneInfo {
+	if a.trainingService == nil {
+		return nil
+	}
+	return a.trainingService.GetMilestoneInfo(milestoneType)
+}
+
+// GetAllMilestones 获取所有里程碑定义
+func (a *App) GetAllMilestones() []models.MilestoneInfo {
+	return models.GetMilestones()
 }

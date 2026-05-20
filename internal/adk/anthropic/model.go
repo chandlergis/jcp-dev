@@ -75,6 +75,9 @@ func (m *AnthropicModel) doRequest(ctx context.Context, ar *MessagesRequest) (*h
 		return nil, fmt.Errorf("build endpoint: %w", err)
 	}
 
+	modelLog.Debug("Anthropic 请求: URL=%s, Model=%s", endpoint, ar.Model)
+	modelLog.Debug("Anthropic 请求体: %s", string(jsonBody))
+
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -96,6 +99,16 @@ func (m *AnthropicModel) doRequest(ctx context.Context, ar *MessagesRequest) (*h
 		modelLog.Error("API 响应异常: status=%d, body=%s", resp.StatusCode, string(body))
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
+
+	// 读取响应体用于调试
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	modelLog.Debug("Anthropic 响应: %s", string(body))
+
+	// 创建新的响应
+	resp.Body = io.NopCloser(bytes.NewReader(body))
 
 	return resp, nil
 }

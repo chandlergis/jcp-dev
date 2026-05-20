@@ -64,7 +64,7 @@ interface StockMoveResult {
   updateTime?: string;
 }
 
-const AUTO_REFRESH_INTERVAL_MS = 5000;
+const AUTO_REFRESH_INTERVAL_MS = 30000; // 30秒刷新一次，避免请求过于频繁
 const AUTO_REFRESH_INTERVAL_SECONDS = AUTO_REFRESH_INTERVAL_MS / 1000;
 
 const CATEGORY_LABELS: Record<BoardCategory, string> = {
@@ -134,6 +134,7 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
   }, []);
 
   const loadBoardFlow = useCallback(async (nextCategory: BoardCategory, preferredBoardCode?: string) => {
+    if (loading) return; // 防止重复请求
     setLoading(true);
     setError('');
     try {
@@ -158,16 +159,14 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
     } catch (err) {
       const message = err instanceof Error ? err.message : '获取板块异动失败';
       setError(message);
-      setBoardFlow(null);
-      setSelectedBoard(null);
-      setLeaderResult(null);
-      setLeaderError('');
+      // 不清空现有数据，保持上次的结果
     } finally {
       setLoading(false);
     }
-  }, [loadBoardLeaders]);
+  }, [loadBoardLeaders, loading]);
 
   const loadStockMoves = useCallback(async (nextType: StockMoveType) => {
+    if (stockLoading) return; // 防止重复请求
     setStockLoading(true);
     setStockError('');
     try {
@@ -184,11 +183,11 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
     } catch (err) {
       const message = err instanceof Error ? err.message : '获取盘口异动失败';
       setStockError(message);
-      setStockMoves(null);
+      // 不清空现有数据，保持上次的结果
     } finally {
       setStockLoading(false);
     }
-  }, []);
+  }, [stockLoading]);
 
   useEffect(() => {
     if (!isOpen) return;

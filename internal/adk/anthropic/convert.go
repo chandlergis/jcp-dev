@@ -90,14 +90,16 @@ func toAnthropicRequest(req *model.LLMRequest, modelName string, noSystemRole bo
 
 	// 应用配置
 	if req.Config != nil {
-		if req.Config.Temperature != nil {
+		// claude-opus-4 系列不支持 temperature 参数
+		// 只有非 opus-4 模型才设置 temperature
+		if req.Config.Temperature != nil && !isOpus4Model(modelName) {
 			t := float64(*req.Config.Temperature)
 			ar.Temperature = &t
 		}
 		if req.Config.MaxOutputTokens > 0 {
 			ar.MaxTokens = int(req.Config.MaxOutputTokens)
 		}
-		if req.Config.TopP != nil {
+		if req.Config.TopP != nil && !isOpus4Model(modelName) {
 			p := float64(*req.Config.TopP)
 			ar.TopP = &p
 		}
@@ -107,6 +109,12 @@ func toAnthropicRequest(req *model.LLMRequest, modelName string, noSystemRole bo
 	}
 
 	return ar, nil
+}
+
+// isOpus4Model 检查是否为 Claude Opus 4 系列模型（不支持 temperature/top_p）
+func isOpus4Model(modelName string) bool {
+	return strings.Contains(strings.ToLower(modelName), "opus-4") ||
+		strings.Contains(strings.ToLower(modelName), "opus4")
 }
 
 // toAnthropicMessages 将 genai.Content 列表转换为 Anthropic messages

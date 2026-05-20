@@ -9,6 +9,7 @@ import { PositionDialog } from './components/PositionDialog';
 import { HotTrendDialog } from './components/HotTrendDialog';
 import { LongHuBangDialog } from './components/LongHuBangDialog';
 import { MarketMovesDialog } from './components/MarketMovesDialog';
+import { TrainingDialog } from './components/TrainingDialog';
 import { WelcomePage } from './components/WelcomePage';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { useTheme } from './contexts/ThemeContext';
@@ -22,7 +23,7 @@ import { getConfig, updateConfig } from './services/configService';
 import { useMarketEvents } from './hooks/useMarketEvents';
 import { useMarketStatus } from './hooks/useMarketStatus';
 import { Stock, KLineData, OrderBook, TimePeriod, Telegraph, MarketIndex, F10Overview } from './types';
-import { Radio, Settings, List, Minus, Square, X, Copy, Briefcase, TrendingUp, BarChart3, Activity } from 'lucide-react';
+import { Radio, Settings, List, Minus, Square, X, Copy, Briefcase, TrendingUp, BarChart3, Activity, GraduationCap } from 'lucide-react';
 import logo from './assets/images/logo.png';
 import { GetTelegraphList, OpenURL, WindowMinimize, WindowMaximize, WindowClose } from '../wailsjs/go/main/App';
 import { WindowIsMaximised, WindowSetSize, WindowGetSize } from '../wailsjs/runtime/runtime';
@@ -66,6 +67,7 @@ const App: React.FC = () => {
   const [showHotTrend, setShowHotTrend] = useState(false);
   const [showLongHuBang, setShowLongHuBang] = useState(false);
   const [showMarketMoves, setShowMarketMoves] = useState(false);
+  const [showTraining, setShowTraining] = useState(false);
   const [showF10, setShowF10] = useState(false);
   const [marketIndices, setMarketIndices] = useState<MarketIndex[]>([]);
   const [isMaximized, setIsMaximized] = useState(false);
@@ -387,6 +389,16 @@ const App: React.FC = () => {
     loadWatchlist();
   }, [subscribeOrderBook]);
 
+  // 刷新自选股列表
+  const refreshWatchlist = useCallback(async () => {
+    try {
+      const list = await getWatchlist();
+      setWatchlist(list);
+    } catch (err) {
+      console.error('Failed to refresh watchlist:', err);
+    }
+  }, []);
+
   // Load K-line data when symbol or period changes
   useEffect(() => {
     if (!selectedSymbol) return;
@@ -535,6 +547,13 @@ const App: React.FC = () => {
           >
             <Activity className="h-4 w-4" />
           </button>
+          <button
+            onClick={() => setShowTraining(true)}
+            className={`p-2 rounded-lg fin-panel border fin-divider transition-colors ${colors.isDark ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900'} hover:border-green-400/40`}
+            title="K线训练营"
+          >
+            <GraduationCap className="h-4 w-4" />
+          </button>
           <ThemeSwitcher />
           <button
             onClick={() => setShowSettings(true)}
@@ -590,6 +609,7 @@ const App: React.FC = () => {
             onSelect={handleSelectStock}
             onAddStock={handleAddStock}
             onRemoveStock={handleRemoveStock}
+            onWatchlistChange={refreshWatchlist}
             marketIndices={marketIndices}
           />
         </div>
@@ -753,6 +773,7 @@ const App: React.FC = () => {
       <HotTrendDialog isOpen={showHotTrend} onClose={() => setShowHotTrend(false)} />
       <LongHuBangDialog isOpen={showLongHuBang} onClose={() => setShowLongHuBang(false)} />
       <MarketMovesDialog isOpen={showMarketMoves} onClose={() => setShowMarketMoves(false)} />
+      <TrainingDialog isOpen={showTraining} onClose={() => setShowTraining(false)} />
     </div>
   );
 };

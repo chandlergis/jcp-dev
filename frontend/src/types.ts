@@ -312,3 +312,136 @@ export interface F10Overview {
   valuationTrend?: F10ValuationTrend;
   errors?: Record<string, string>;
 }
+
+// ========== 选股相关类型 ==========
+
+export type SelectorStrategy = 
+  | 'bbi_kdj'
+  | 'super_b1'
+  | 'peak_kdj'
+  | 'bbi_short_long'
+  | 'breakout_volume_kdj'
+  | 'kdj_divergence'
+  | 'bbi_pullback';
+
+export interface SelectorStrategyInfo {
+  id: SelectorStrategy;
+  name: string;
+  description: string;
+}
+
+export interface SelectorStock {
+  symbol: string;
+  name: string;
+  industry: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  volume: number;
+  amount: number;
+  score: number;
+  scoreDetail: string;
+}
+
+export interface SelectorFilterParams {
+  priceMin: number;
+  priceMax: number;
+}
+
+export interface SelectorResult {
+  strategy: SelectorStrategy;
+  strategyName: string;
+  date: string;
+  stocks: SelectorStock[];
+  total: number;
+  params: SelectorFilterParams;
+}
+
+export interface SelectorRecord {
+  date: string;
+  strategy: SelectorStrategy;
+  strategyName: string;
+  stocks: SelectorStock[];
+  params: SelectorFilterParams;
+  executedAt: string;
+  addedToWatchlist?: string[];
+}
+
+// ========== K线训练营类型 ==========
+
+export type TradeAction = 'buy' | 'sell';
+export type PositionLevel = 'full' | 'half' | 'quarter' | 'tenth';
+export type TrainingStatus = 'running' | 'finished' | 'aborted';
+
+export interface TrainingSession {
+  id: string;
+  stockCode: string;
+  stockName: string;
+  startDate: string;
+  endDate: string;
+  currentDate: string;
+  currentIndex: number;
+  totalDays: number;
+  initialCapital: number;
+  cash: number;
+  totalAsset: number;
+  position: number;
+  avgCost: number;
+  positionValue: number;
+  totalReturn: number;
+  totalProfit: number;
+  status: TrainingStatus;
+  isTradingDay: boolean;
+  milestones: string[];
+  tradeCount: number;
+  winCount: number;
+  maxDrawdown: number;
+  winStreak: number;
+  maxWinStreak: number;
+  createdAt: string;
+  finishedAt?: string;
+}
+
+export interface TradeRecord {
+  id: string;
+  sessionId: string;
+  action: TradeAction;
+  date: string;
+  price: number;
+  quantity: number;
+  amount: number;
+  positionLevel: PositionLevel;
+  cashAfter: number;
+  positionAfter: number;
+  assetAfter: number;
+  profit?: number;
+  profitPercent?: number;
+  createdAt: string;
+}
+
+export interface CapitalSnapshot {
+  date: string;
+  totalAsset: number;
+  cash: number;
+  position: number;
+  price: number;
+}
+
+export interface MilestoneInfo {
+  type: string;
+  name: string;
+  description: string;
+  icon: string;
+}
+
+export interface TrainingStats {
+  totalReturn: number;
+  totalProfit: number;
+  tradeCount: number;
+  winCount: number;
+  winRate: number;
+  maxDrawdown: number;
+  avgHoldingDays: number;
+  sharpeRatio: number;
+  maxWinStreak: number;
+}

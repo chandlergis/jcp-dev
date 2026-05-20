@@ -7,9 +7,13 @@ import {hottrend} from '../models';
 import {tools} from '../models';
 import {mcp} from '../models';
 
+export function AbortTraining(arg1:string):Promise<string>;
+
 export function AddAgentConfig(arg1:models.AgentConfig):Promise<string>;
 
 export function AddMCPServer(arg1:models.MCPServerConfig):Promise<string>;
+
+export function AddStocksToWatchlist(arg1:Array<models.Stock>):Promise<Array<string>>;
 
 export function AddStrategy(arg1:models.Strategy):Promise<string>;
 
@@ -19,19 +23,27 @@ export function CancelInterruptedMeeting(arg1:string):Promise<boolean>;
 
 export function CancelMeeting(arg1:string):Promise<boolean>;
 
+export function CancelSelector():Promise<void>;
+
 export function CheckForUpdate():Promise<services.UpdateInfo>;
 
 export function ClearSessionMessages(arg1:string):Promise<string>;
 
+export function CreateTrainingSession():Promise<models.TrainingSession>;
+
 export function DeleteAgentConfig(arg1:string):Promise<string>;
 
 export function DeleteMCPServer(arg1:string):Promise<string>;
+
+export function DeleteSelectorRecord(arg1:string,arg2:models.SelectorStrategy):Promise<string>;
 
 export function DeleteStrategy(arg1:string):Promise<string>;
 
 export function DoUpdate():Promise<string>;
 
 export function EnhancePrompt(arg1:main.EnhancePromptRequest):Promise<main.EnhancePromptResponse>;
+
+export function ExecuteTrainingTrade(arg1:main.TrainingTradeRequest):Promise<models.TradeRecord>;
 
 export function GenerateStrategy(arg1:main.GenerateStrategyRequest):Promise<main.GenerateStrategyResponse>;
 
@@ -41,7 +53,11 @@ export function GetAgentConfigs():Promise<Array<models.AgentConfig>>;
 
 export function GetAllHotTrends():Promise<Array<hottrend.HotTrendResult>>;
 
+export function GetAllMilestones():Promise<Array<models.MilestoneInfo>>;
+
 export function GetAvailableTools():Promise<Array<tools.ToolInfo>>;
+
+export function GetBestTrainingRecord():Promise<models.TrainingRecord>;
 
 export function GetBoardFundFlow(arg1:string,arg2:number,arg3:number):Promise<models.BoardFundFlowList>;
 
@@ -75,11 +91,21 @@ export function GetMarketIndices():Promise<Array<models.MarketIndex>>;
 
 export function GetMarketStatus():Promise<services.MarketStatus>;
 
+export function GetMilestoneInfo(arg1:models.MilestoneType):Promise<models.MilestoneInfo>;
+
 export function GetOpenClawStatus():Promise<Record<string, any>>;
 
 export function GetOrCreateSession(arg1:string,arg2:string):Promise<models.StockSession>;
 
 export function GetOrderBook(arg1:string):Promise<models.OrderBook>;
+
+export function GetSelectorCacheStats():Promise<Record<string, number>>;
+
+export function GetSelectorRecords():Promise<Array<models.SelectorRecord>>;
+
+export function GetSelectorRecordsByDate(arg1:string):Promise<Array<models.SelectorRecord>>;
+
+export function GetSelectorStrategies():Promise<Array<models.SelectorStrategyInfo>>;
 
 export function GetSessionMessages(arg1:string):Promise<Array<models.ChatMessage>>;
 
@@ -95,9 +121,25 @@ export function GetTradeDates(arg1:number):Promise<Array<string>>;
 
 export function GetTradingSchedule():Promise<services.TradingSchedule>;
 
+export function GetTrainingCapitalCurve(arg1:string):Promise<Array<models.CapitalSnapshot>>;
+
+export function GetTrainingKlines(arg1:string):Promise<Array<models.KLineData>>;
+
+export function GetTrainingRecords():Promise<Array<models.TrainingRecord>>;
+
+export function GetTrainingSession(arg1:string):Promise<models.TrainingSession>;
+
+export function GetTrainingStats(arg1:string):Promise<Record<string, any>>;
+
+export function GetTrainingTrades(arg1:string):Promise<Array<models.TradeRecord>>;
+
 export function GetWatchlist():Promise<Array<models.Stock>>;
 
 export function Greet(arg1:string):Promise<string>;
+
+export function IsSelectorRunning():Promise<boolean>;
+
+export function NextTrainingDay(arg1:string):Promise<models.KLineData>;
 
 export function NotifyFrontendReady():Promise<void>;
 
@@ -110,6 +152,10 @@ export function RestartApp():Promise<string>;
 export function RetryAgent(arg1:string,arg2:string,arg3:string):Promise<models.ChatMessage>;
 
 export function RetryAgentAndContinue(arg1:string):Promise<Array<models.ChatMessage>>;
+
+export function RunSelector(arg1:main.SelectorRunRequest):Promise<models.SelectorResult>;
+
+export function SaveSelectorRecord(arg1:models.SelectorResult):Promise<string>;
 
 export function SearchStocks(arg1:string):Promise<Array<services.StockSearchResult>>;
 

@@ -1723,7 +1723,12 @@ func (ms *MarketService) fetchMarketJSON(urlStr string, headers map[string]strin
 			return result, nil
 		}
 		lastErr = err
-		time.Sleep(time.Duration(attempt+1) * 250 * time.Millisecond)
+		// 如果是EOF错误，增加等待时间
+		if strings.Contains(err.Error(), "EOF") {
+			time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
+		} else {
+			time.Sleep(time.Duration(attempt+1) * 250 * time.Millisecond)
+		}
 	}
 	return nil, lastErr
 }

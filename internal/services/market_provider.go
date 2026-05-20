@@ -23,7 +23,7 @@ func NewMarketServiceWithProviders(primary marketProvider, fallback marketProvid
 
 func newMarketService() *MarketService {
 	ms := &MarketService{
-		client:        proxy.GetManager().GetClientWithTimeout(5 * time.Second),
+		client:        proxy.GetManager().GetClientWithTimeout(10 * time.Second),
 		cache:         make(map[string]*stockCache),
 		cacheTTL:      2 * time.Second,
 		klineCache:    make(map[string]*klineCache),

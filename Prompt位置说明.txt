@@ -1,0 +1,17 @@
+各角色的 Prompt（系统提示词/指令）定义在 Go 代码中，具体位置如下：
+
+**文件路径：**
+`jcp/internal/services/strategy_service.go` (第 37-99 行)
+
+**包含的角色及 Prompt：**
+1.  **老陈 (基本面研究员)**: 第 45 行
+2.  **K线王 (技术分析师)**: 第 55 行
+3.  **钱姐 (资金流向分析师)**: 第 65 行
+4.  **政策通 (政策解读专家)**: 第 75 行
+5.  **风控李 (风险控制师)**: 第 85 行
+6.  **舆情师 (全网舆情分析专家)**: 第 95 行
+
+**如何修改：**
+你可以直接用文本编辑器打开 `jcp/internal/services/strategy_service.go` 文件，找到 `getDefaultStrategyAgents` 函数，修改对应角色的 `Instruction` 字段内容即可。修改后需要重新编译 (`wails build`) 才能生效。
+
+注意：这些 Prompt 是硬编码在代码中的初始默认值。如果你在软件界面中修改过策略或 Agent 配置，新的配置会保存在 `C:\Users\chandler\AppData\Roaming\jcp\strategies.json` 中，软件启动时会优先读取这个文件。

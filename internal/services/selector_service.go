@@ -130,24 +130,22 @@ func (s *SelectorService) RunSelector(strategyID models.SelectorStrategy, priceM
 
 	// 创建K线数据获取函数（带缓存）
 	fetcher := func(symbol string) ([]models.KLineData, error) {
-		// 先尝试从本地缓存获取
+		var klines []models.KLineData
+		fromCache := false
+
+		// 先尝试从本地文件缓存获取（不管是否今天，历史数据都能用）
 		if cached, ok := s.klineCache.Get(symbol, "1d"); ok && len(cached) > 0 {
 			cacheHit++
-			// 过滤掉价格为0的异常数据
-			valid := make([]models.KLineData, 0, len(cached))
-			for _, k := range cached {
-				if k.Close > 0 && k.Open > 0 {
-					valid = append(valid, k)
-				}
+			klines = cached
+			fromCache = true
+		} else {
+			cacheMiss++
+			// 缓存不存在，首次全量拉取
+			var err error
+			klines, err = s.marketSvc.GetKLineData(symbol, "1d", 250)
+			if err != nil {
+				return nil, err
 			}
-			return valid, nil
-		}
-
-		cacheMiss++
-		// 从网络获取 - 获取250天数据以满足策略需求
-		klines, err := s.marketSvc.GetKLineData(symbol, "1d", 250)
-		if err != nil {
-			return nil, err
 		}
 
 		// 过滤掉价格为0的异常数据
@@ -157,13 +155,19 @@ func (s *SelectorService) RunSelector(strategyID models.SelectorStrategy, priceM
 				valid = append(valid, k)
 			}
 		}
+		klines = valid
 
-		// 保存到本地缓存
-		if len(valid) > 0 {
-			s.klineCache.Set(symbol, "1d", valid)
+		// 只用实时行情补充当日数据（不重拉历史）
+		if len(klines) > 0 {
+			klines = s.mergeRealtimeQuote(symbol, klines)
 		}
 
-		return valid, nil
+		// 更新文件缓存
+		if fromCache && len(klines) > 0 {
+			s.klineCache.Set(symbol, "1d", klines)
+		}
+
+		return klines, nil
 	}
 
 	// 执行选股 - 并发数10
@@ -311,4 +315,47 @@ func (s *SelectorService) getTrainStockCodes(stocks []selector.StockBasicInfo, m
 		codes = append(codes, stocks[i].Symbol)
 	}
 	return codes
+}
+
+// mergeRealtimeQuote 用实时行情补充当日K线
+// 收盘后TDX日K可能未更新今天数据，用实时行情补上
+func (s *SelectorService) mergeRealtimeQuote(symbol string, klines []models.KLineData) []models.KLineData {
+	if len(klines) == 0 {
+		return klines
+	}
+
+	today := time.Now().Format("2006-01-02")
+	lastKline := klines[len(klines)-1]
+
+	// 如果最后一根K线已经是今天，不需要补充
+	if lastKline.Time == today {
+		return klines
+	}
+
+	// 获取实时行情
+	quotes, err := s.marketSvc.GetStockDataWithOrderBook(symbol)
+	if err != nil || len(quotes) == 0 {
+		return klines
+	}
+	q := quotes[0]
+
+	// 实时价格必须有效
+	if q.Price <= 0 || q.Open <= 0 {
+		return klines
+	}
+
+	// 合成今日K线
+	todayKline := models.KLineData{
+		Time:   today,
+		Open:   q.Open,
+		High:   q.High,
+		Low:    q.Low,
+		Close:  q.Price,
+		Volume: q.Volume,
+		Amount: q.Amount,
+	}
+
+	// 追加到K线末尾
+	klines = append(klines, todayKline)
+	return klines
 }

@@ -412,13 +412,23 @@ func (ms *MarketService) GetKLineData(code string, period string, days int) ([]m
 	}
 	ms.klineCacheMu.RUnlock()
 
-	// 从API获取数据
+	return ms.fetchAndCacheKLine(cacheKey, code, period, days, ttl)
+}
+
+// ForceGetKLineData 强制刷新K线数据（跳过内存缓存）
+func (ms *MarketService) ForceGetKLineData(code string, period string, days int) ([]models.KLineData, error) {
+	cacheKey := fmt.Sprintf("%s:%s:%d", code, period, days)
+	ttl := ms.getKLineCacheTTL(period)
+	return ms.fetchAndCacheKLine(cacheKey, code, period, days, ttl)
+}
+
+// fetchAndCacheKLine 从API获取并缓存K线数据
+func (ms *MarketService) fetchAndCacheKLine(cacheKey, code, period string, days int, ttl time.Duration) ([]models.KLineData, error) {
 	klines, err := ms.fetchKLineDataWithFallback(code, period, days)
 	if err != nil {
 		return nil, err
 	}
 
-	// 更新缓存
 	ms.klineCacheMu.Lock()
 	ms.klineCache[cacheKey] = &klineCache{
 		data:      klines,

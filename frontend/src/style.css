@@ -435,3 +435,5 @@ body.grabbing,
 body.grabbing * {
     cursor: grabbing !important;
 }
+
+/* 玄学占卜 - 3D 圣杯由 React Three Fiber 渲染，无需 CSS 动画 */

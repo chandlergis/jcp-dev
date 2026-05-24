@@ -96,7 +96,7 @@ func (s *KLineCacheService) autoSave() {
 	}
 }
 
-// Get 获取缓存的K线数据
+// Get 获取缓存的K线数据（仅返回数据，不判断有效性）
 func (s *KLineCacheService) Get(symbol, period string) ([]models.KLineData, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -106,19 +106,75 @@ func (s *KLineCacheService) Get(symbol, period string) ([]models.KLineData, bool
 	if !ok {
 		return nil, false
 	}
+	return entry.Data, true
+}
 
-	// 检查缓存是否过期（日线数据当天有效）
-	if period == "1d" {
-		now := time.Now()
-		entryDate := entry.UpdatedAt.Format("2006-01-02")
-		todayDate := now.Format("2006-01-02")
-		if entryDate != todayDate {
-			// 非今天的数据，返回false要求更新
-			return entry.Data, false
-		}
+// CacheFreshness 缓存新鲜度
+type CacheFreshness int
+
+const (
+	CacheStale     CacheFreshness = iota // 完全过期，需要重新拉取历史
+	CacheNeedQuote                       // 历史数据可用，但需要补充实时行情
+	CacheFresh                           // 完全新鲜，直接使用
+)
+
+// CheckFreshness 检查缓存新鲜度
+// 根据市场状态和缓存中最后一根K线的日期来判断
+// lastTradeDate: 最近一个交易日（YYYY-MM-DD），由调用方传入
+// marketStatus: 当前市场状态 "trading" / "closed" / "pre_market" / "lunch_break"
+func (s *KLineCacheService) CheckFreshness(symbol, period, lastTradeDate, marketStatus string) (CacheFreshness, []models.KLineData) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	key := symbol + ":" + period
+	entry, ok := s.store.Entries[key]
+	if !ok || len(entry.Data) == 0 {
+		return CacheStale, nil
 	}
 
-	return entry.Data, true
+	if period != "1d" {
+		// 非日K的缓存：按30秒TTL处理
+		if time.Since(entry.UpdatedAt) < 30*time.Second {
+			return CacheFresh, entry.Data
+		}
+		return CacheStale, entry.Data
+	}
+
+	// 日K的缓存新鲜度判断
+	lastKlineDate := entry.Data[len(entry.Data)-1].Time
+	updatedToday := entry.UpdatedAt.Format("2006-01-02") == time.Now().Format("2006-01-02")
+
+	switch marketStatus {
+	case "closed", "lunch_break":
+		// 已收盘/午休：最后一根K线日期等于最近交易日 → 完全新鲜
+		if lastKlineDate == lastTradeDate {
+			return CacheFresh, entry.Data
+		}
+		// 否则需要补当日行情（午休时可能没今日K线，已收盘时也可能没今日K线）
+		return CacheNeedQuote, entry.Data
+
+	case "trading":
+		// 交易中：永远需要补实时行情（价格在变）
+		// 但只要历史数据存在（最后K线 >= 上一交易日）就不用重新拉取历史
+		if lastKlineDate == lastTradeDate || updatedToday {
+			return CacheNeedQuote, entry.Data
+		}
+		return CacheNeedQuote, entry.Data
+
+	case "pre_market":
+		// 盘前：最近交易日数据已存在 → 完全新鲜（盘前数据不会变）
+		if lastKlineDate == lastTradeDate {
+			return CacheFresh, entry.Data
+		}
+		return CacheNeedQuote, entry.Data
+
+	default:
+		// 休市日（周末/节假日）：最后K线 = 最近交易日 → 完全新鲜
+		if lastKlineDate == lastTradeDate {
+			return CacheFresh, entry.Data
+		}
+		return CacheStale, entry.Data
+	}
 }
 
 // Set 设置缓存

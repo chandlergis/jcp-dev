@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, RefreshCw, TrendingUp, X } from 'lucide-react';
 import { GetBoardFundFlow, GetBoardLeaders, GetStockMoves } from '../../wailsjs/go/main/App';
+import { useMarketStatus } from '../hooks/useMarketStatus';
 
 interface MarketMovesDialogProps {
   isOpen: boolean;
@@ -64,8 +65,41 @@ interface StockMoveResult {
   updateTime?: string;
 }
 
-const AUTO_REFRESH_INTERVAL_MS = 30000; // 30秒刷新一次，避免请求过于频繁
-const AUTO_REFRESH_INTERVAL_SECONDS = AUTO_REFRESH_INTERVAL_MS / 1000;
+// 不同市场状态下的自动刷新间隔（秒），0 表示不自动刷新
+const REFRESH_INTERVAL_BY_STATUS: Record<string, number> = {
+  trading: 30,       // 交易中：30秒
+  pre_market: 0,     // 盘前：不刷（数据停留在前一交易日）
+  lunch_break: 0,    // 午休：不刷（行情冻结）
+  closed: 0,         // 已收盘/休市：不刷（数据基本不变）
+};
+
+const DEFAULT_REFRESH_INTERVAL_SECONDS = 30;
+
+// 根据市场状态返回刷新间隔（秒）
+function getRefreshIntervalSeconds(status: string | undefined): number {
+  if (!status) return DEFAULT_REFRESH_INTERVAL_SECONDS;
+  if (status in REFRESH_INTERVAL_BY_STATUS) {
+    return REFRESH_INTERVAL_BY_STATUS[status];
+  }
+  return DEFAULT_REFRESH_INTERVAL_SECONDS;
+}
+
+// 根据市场状态生成人类可读的"刷新策略"提示
+function getRefreshTip(status: string | undefined, statusText: string | undefined): string {
+  if (!status) return '自动刷新';
+  switch (status) {
+    case 'trading':
+      return '交易中 · 30秒自动刷新';
+    case 'pre_market':
+      return `${statusText || '盘前'} · 已暂停自动刷新`;
+    case 'lunch_break':
+      return '午休 · 已暂停自动刷新';
+    case 'closed':
+      return `${statusText || '已收盘'} · 已暂停自动刷新`;
+    default:
+      return statusText || '自动刷新';
+  }
+}
 
 const CATEGORY_LABELS: Record<BoardCategory, string> = {
   industry: '行业',
@@ -91,6 +125,16 @@ const formatAmount = (value: number): string => {
 };
 
 export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, onClose }) => {
+  const { status: marketStatus } = useMarketStatus();
+  const refreshIntervalSeconds = useMemo(
+    () => getRefreshIntervalSeconds(marketStatus?.status),
+    [marketStatus?.status]
+  );
+  const refreshTip = useMemo(
+    () => getRefreshTip(marketStatus?.status, marketStatus?.statusText),
+    [marketStatus?.status, marketStatus?.statusText]
+  );
+
   const [activeTab, setActiveTab] = useState<MoveTab>('board');
   const [category, setCategory] = useState<BoardCategory>('industry');
   const [stockMoveType, setStockMoveType] = useState<StockMoveType>('surge');
@@ -104,11 +148,11 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
   const [leaderLoading, setLeaderLoading] = useState(false);
   const [leaderError, setLeaderError] = useState('');
   const [leaderResult, setLeaderResult] = useState<BoardLeaderResult | null>(null);
-  const [autoRefreshCountdown, setAutoRefreshCountdown] = useState(AUTO_REFRESH_INTERVAL_SECONDS);
+  const [autoRefreshCountdown, setAutoRefreshCountdown] = useState(refreshIntervalSeconds);
 
   const resetAutoRefreshCountdown = useCallback(() => {
-    setAutoRefreshCountdown(AUTO_REFRESH_INTERVAL_SECONDS);
-  }, []);
+    setAutoRefreshCountdown(refreshIntervalSeconds);
+  }, [refreshIntervalSeconds]);
 
   const loadBoardLeaders = useCallback(async (boardCode: string) => {
     setLeaderLoading(true);
@@ -203,16 +247,23 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
     void loadStockMoves(stockMoveType);
   }, [isOpen, activeTab, stockMoveType, loadStockMoves]);
 
+  // 市场状态变化时重置倒计时基线
   useEffect(() => {
-    if (!isOpen) return;
+    setAutoRefreshCountdown(refreshIntervalSeconds);
+  }, [refreshIntervalSeconds]);
+
+  // 倒计时（仅在自动刷新启用时跑）
+  useEffect(() => {
+    if (!isOpen || refreshIntervalSeconds <= 0) return;
     const timer = window.setInterval(() => {
-      setAutoRefreshCountdown(prev => (prev <= 1 ? AUTO_REFRESH_INTERVAL_SECONDS : prev - 1));
+      setAutoRefreshCountdown(prev => (prev <= 1 ? refreshIntervalSeconds : prev - 1));
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [isOpen]);
+  }, [isOpen, refreshIntervalSeconds]);
 
+  // 自动刷新（按市场状态决定是否启用）
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || refreshIntervalSeconds <= 0) return;
     const timer = window.setInterval(() => {
       if (activeTab === 'stock') {
         void loadStockMoves(stockMoveType);
@@ -220,9 +271,19 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
         void loadBoardFlow(category, selectedBoard?.code);
       }
       resetAutoRefreshCountdown();
-    }, AUTO_REFRESH_INTERVAL_MS);
+    }, refreshIntervalSeconds * 1000);
     return () => window.clearInterval(timer);
-  }, [isOpen, activeTab, stockMoveType, category, selectedBoard?.code, loadBoardFlow, loadStockMoves, resetAutoRefreshCountdown]);
+  }, [
+    isOpen,
+    activeTab,
+    stockMoveType,
+    category,
+    selectedBoard?.code,
+    loadBoardFlow,
+    loadStockMoves,
+    resetAutoRefreshCountdown,
+    refreshIntervalSeconds,
+  ]);
 
   const onChangeCategory = (nextCategory: BoardCategory) => {
     setCategory(nextCategory);
@@ -248,15 +309,19 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
             <div>
               <h2 className="text-lg font-semibold fin-text-primary">异动中心</h2>
               <div className="text-[11px] fin-text-tertiary">
-                {activeTab === 'stock' ? '盘口异动' : '板块异动'}自动刷新，{autoRefreshCountdown}s 后更新
+                {refreshIntervalSeconds > 0
+                  ? `${activeTab === 'stock' ? '盘口异动' : '板块异动'} · ${refreshTip} · ${autoRefreshCountdown}s 后更新`
+                  : `${activeTab === 'stock' ? '盘口异动' : '板块异动'} · ${refreshTip}`}
               </div>
             </div>
           </div>
           <div className="flex items-center gap-3">
             <div className="text-[11px] fin-text-secondary">
-              {activeTab === 'stock'
-                ? (stockLoading ? '刷新中...' : '自动刷新中')
-                : (loading || leaderLoading ? '刷新中...' : '自动刷新中')}
+              {refreshIntervalSeconds > 0
+                ? (activeTab === 'stock'
+                    ? (stockLoading ? '刷新中...' : '自动刷新中')
+                    : (loading || leaderLoading ? '刷新中...' : '自动刷新中'))
+                : '手动刷新模式'}
             </div>
             <button onClick={onClose} className="p-2 rounded-lg fin-hover transition-colors">
               <X className="w-4 h-4 fin-text-secondary" />

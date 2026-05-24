@@ -688,6 +688,34 @@ func (ms *MarketService) GetTradingSchedule() TradingSchedule {
 	}
 }
 
+// GetLastTradeDate 获取最近一个交易日的日期字符串 (YYYY-MM-DD)
+// 规则：
+//   - 如果今天是交易日且已开盘（>=9:30）→ 返回今天
+//   - 如果今天是交易日但未开盘 → 返回上一个交易日
+//   - 如果今天非交易日 → 返回上一个交易日
+func (ms *MarketService) GetLastTradeDate() string {
+	loc := time.FixedZone("CST", 8*60*60)
+	now := time.Now().In(loc)
+
+	isToday, _ := ms.isTradeDay(now)
+	currentMinutes := now.Hour()*60 + now.Minute()
+
+	// 如果今天是交易日且过了开盘时间，返回今天
+	if isToday && currentMinutes >= 9*60+30 {
+		return now.Format("2006-01-02")
+	}
+
+	// 否则向前找最近的交易日
+	for i := 1; i < 30; i++ {
+		d := now.AddDate(0, 0, -i)
+		if ok, _ := ms.isTradeDay(d); ok {
+			return d.Format("2006-01-02")
+		}
+	}
+	// 兜底
+	return now.AddDate(0, 0, -1).Format("2006-01-02")
+}
+
 // isTradeDay 判断指定日期是否为交易日
 // A股交易日判定：非周末 且 非节假日（调休上班也不算交易日）
 func (ms *MarketService) isTradeDay(date time.Time) (bool, string) {
@@ -1028,8 +1056,28 @@ func (ms *MarketService) parseMarketIndices(data string) ([]models.MarketIndex, 
 	return indices, nil
 }
 
-// GetBoardFundFlowList 获取板块资金流列表（行业/概念/地域）
+// GetBoardFundFlowList 获取板块资金流列表（行业/概念/地域）— 带按市场状态的缓存
 func (ms *MarketService) GetBoardFundFlowList(category string, page int, size int) (models.BoardFundFlowList, error) {
+	normalizedCategory := normalizeBoardCategory(category)
+	cacheKey := "board_flow:" + normalizedCategory + ":" + strconv.Itoa(page) + ":" + strconv.Itoa(size)
+	marketStatus := ms.GetMarketStatus().Status
+	ttl := ms.getMovesCacheTTL(marketStatus)
+
+	if cached, ok := movesCacheGet(cacheKey, ttl); ok {
+		if data, ok := castBoardFundFlowList(cached); ok {
+			return data, nil
+		}
+	}
+
+	data, err := ms.fetchBoardFundFlowList(category, page, size)
+	if err == nil && len(data.Items) > 0 {
+		movesCacheSet(cacheKey, data)
+	}
+	return data, err
+}
+
+// fetchBoardFundFlowList 实际从API获取板块资金流（不带缓存）
+func (ms *MarketService) fetchBoardFundFlowList(category string, page int, size int) (models.BoardFundFlowList, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -1105,8 +1153,28 @@ func (ms *MarketService) GetBoardFundFlowList(category string, page int, size in
 	}, nil
 }
 
-// GetStockMovesList 获取盘口异动列表
+// GetStockMovesList 获取盘口异动列表 — 带按市场状态的缓存
 func (ms *MarketService) GetStockMovesList(moveType string, page int, size int) (models.StockMoveList, error) {
+	normalizedMoveType := normalizeStockMoveType(moveType)
+	cacheKey := "stock_moves:" + normalizedMoveType + ":" + strconv.Itoa(page) + ":" + strconv.Itoa(size)
+	marketStatus := ms.GetMarketStatus().Status
+	ttl := ms.getMovesCacheTTL(marketStatus)
+
+	if cached, ok := movesCacheGet(cacheKey, ttl); ok {
+		if data, ok := castStockMoveList(cached); ok {
+			return data, nil
+		}
+	}
+
+	data, err := ms.fetchStockMovesList(moveType, page, size)
+	if err == nil && len(data.Items) > 0 {
+		movesCacheSet(cacheKey, data)
+	}
+	return data, err
+}
+
+// fetchStockMovesList 实际从API获取盘口异动（不带缓存）
+func (ms *MarketService) fetchStockMovesList(moveType string, page int, size int) (models.StockMoveList, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -1186,8 +1254,28 @@ func (ms *MarketService) GetStockMovesList(moveType string, page int, size int) 
 	}, nil
 }
 
-// GetBoardLeaders 获取板块龙头候选
+// GetBoardLeaders 获取板块龙头候选 — 带按市场状态的缓存
 func (ms *MarketService) GetBoardLeaders(boardCode string, limit int) (models.BoardLeaderList, error) {
+	normalizedBoard := normalizeBoardCode(boardCode)
+	cacheKey := "board_leaders:" + normalizedBoard + ":" + strconv.Itoa(limit)
+	marketStatus := ms.GetMarketStatus().Status
+	ttl := ms.getMovesCacheTTL(marketStatus)
+
+	if cached, ok := movesCacheGet(cacheKey, ttl); ok {
+		if data, ok := castBoardLeaderList(cached); ok {
+			return data, nil
+		}
+	}
+
+	data, err := ms.fetchBoardLeaders(boardCode, limit)
+	if err == nil && len(data.Items) > 0 {
+		movesCacheSet(cacheKey, data)
+	}
+	return data, err
+}
+
+// fetchBoardLeaders 实际从API获取板块龙头（不带缓存）
+func (ms *MarketService) fetchBoardLeaders(boardCode string, limit int) (models.BoardLeaderList, error) {
 	normalizedBoard := normalizeBoardCode(boardCode)
 	if normalizedBoard == "" {
 		return models.BoardLeaderList{}, fmt.Errorf("无效板块代码: %s", boardCode)

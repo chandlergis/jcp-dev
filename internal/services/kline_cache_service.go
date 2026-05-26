@@ -142,23 +142,55 @@ func (s *KLineCacheService) CheckFreshness(symbol, period, lastTradeDate, market
 
 	// 日K的缓存新鲜度判断
 	lastKlineDate := entry.Data[len(entry.Data)-1].Time
-	updatedToday := entry.UpdatedAt.Format("2006-01-02") == time.Now().Format("2006-01-02")
+	entryToday := entry.UpdatedAt.Format("2006-01-02") == time.Now().Format("2006-01-02")
+	entryAfterClose := entryToday && entry.UpdatedAt.Hour() >= 15
+
+	// 检查倒数第二根K线是否是上一个交易日（排除数据缺口）
+	// 如果缓存有缺口（比如缺了周五的数据），即使最后一根是今天，涨跌幅也会算错
+	hasDataGap := false
+	if len(entry.Data) >= 2 {
+		prevKlineDate := entry.Data[len(entry.Data)-2].Time
+		// prevKlineDate 应该是 lastTradeDate 的前一个交易日
+		// 简单检查：如果间隔超过4天（跨了周末+节假日），肯定有缺口
+		// 更精确的检查：两个日期之间应该只差1-3个交易日
+		prevParsed, err1 := time.Parse("2006-01-02", prevKlineDate)
+		lastParsed, err2 := time.Parse("2006-01-02", lastTradeDate)
+		if err1 == nil && err2 == nil {
+			diffDays := lastParsed.Sub(prevParsed).Hours() / 24
+			// 正常情况：1-3天（连续交易日，如周一到周三=2天，周五到周一=3天）
+			// 如果间隔>=4天，说明中间有交易日数据缺失
+			// 唯一例外：长假（如春节7天），但此时重拉数据也无害
+			if diffDays >= 4 {
+				hasDataGap = true
+				klineCacheLog.Info("[CheckFreshness %s] 数据缺口: prev=%s, last=%s, 间隔%.0f天",
+					symbol, prevKlineDate, lastTradeDate, diffDays)
+			}
+		}
+	}
 
 	switch marketStatus {
-	case "closed", "lunch_break":
-		// 已收盘/午休：最后一根K线日期等于最近交易日 → 完全新鲜
+	case "closed":
+		// 已收盘（交易日15:00后 或 休市日）
+		if hasDataGap {
+			// 有数据缺口 → 强制重新拉取完整历史（缓存数据不完整，涨跌幅会算错）
+			return CacheStale, entry.Data
+		}
+		if lastKlineDate == lastTradeDate && entryAfterClose {
+			// K线日期对得上 + 缓存是在收盘后更新的 + 没有数据缺口 → 完全新鲜
+			return CacheFresh, entry.Data
+		}
+		// 其他情况：需要从API补充当日行情
+		return CacheNeedQuote, entry.Data
+
+	case "lunch_break":
+		// 午休（11:30-13:00）：上午收盘价已定，TDX日K通常已更新
 		if lastKlineDate == lastTradeDate {
 			return CacheFresh, entry.Data
 		}
-		// 否则需要补当日行情（午休时可能没今日K线，已收盘时也可能没今日K线）
 		return CacheNeedQuote, entry.Data
 
 	case "trading":
 		// 交易中：永远需要补实时行情（价格在变）
-		// 但只要历史数据存在（最后K线 >= 上一交易日）就不用重新拉取历史
-		if lastKlineDate == lastTradeDate || updatedToday {
-			return CacheNeedQuote, entry.Data
-		}
 		return CacheNeedQuote, entry.Data
 
 	case "pre_market":
@@ -169,10 +201,11 @@ func (s *KLineCacheService) CheckFreshness(symbol, period, lastTradeDate, market
 		return CacheNeedQuote, entry.Data
 
 	default:
-		// 休市日（周末/节假日）：最后K线 = 最近交易日 → 完全新鲜
-		if lastKlineDate == lastTradeDate {
+		// 休市日（周末/节假日）
+		if lastKlineDate == lastTradeDate && !hasDataGap {
 			return CacheFresh, entry.Data
 		}
+		// 有数据缺口或K线日期不对 → 需要重新拉取
 		return CacheStale, entry.Data
 	}
 }

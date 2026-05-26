@@ -151,24 +151,17 @@ func (s *SelectorService) RunSelector(strategyID models.SelectorStrategy, priceM
 			klines = cached
 
 		case CacheNeedQuote:
-			// 历史数据可用，只补当日实时行情（不重拉历史）
+			// 历史数据可用，补充/校准当日行情（不重拉历史）
 			atomic.AddInt64(&cacheNeedQuote, 1)
 			klines = cached
-			merged := s.mergeRealtimeQuote(symbol, klines)
-			if len(merged) != len(klines) {
-				// 真的追加了一根新K线，需要写回缓存
-				klines = merged
-				needSaveCache = true
-			} else {
-				klines = merged
-			}
+			klines = s.mergeRealtimeQuote(symbol, klines)
+			needSaveCache = true // mergeRealtimeQuote 会追加或更新收盘价，总是需要写回
 
 		case CacheStale:
 			// 完全未命中：拉取完整历史
 			atomic.AddInt64(&cacheStale, 1)
 			fresh, err := s.marketSvc.GetKLineData(symbol, "1d", 250)
 			if err != nil {
-				// 拉取失败时回退到旧缓存（如果有）
 				if len(cached) > 0 {
 					klines = cached
 				} else {
@@ -176,17 +169,10 @@ func (s *SelectorService) RunSelector(strategyID models.SelectorStrategy, priceM
 				}
 			} else {
 				klines = fresh
-				needSaveCache = true
 			}
-			// 拉完了再补当日行情（交易中需要、其他情况下也保险）
-			if len(klines) > 0 {
-				merged := s.mergeRealtimeQuote(symbol, klines)
-				if len(merged) != len(klines) {
-					klines = merged
-				} else {
-					klines = merged
-				}
-			}
+			// 校准当日收盘价
+			klines = s.mergeRealtimeQuote(symbol, klines)
+			needSaveCache = true
 		}
 
 		// 过滤掉价格为0的异常数据
@@ -357,8 +343,9 @@ func (s *SelectorService) getTrainStockCodes(stocks []selector.StockBasicInfo, m
 	return codes
 }
 
-// mergeRealtimeQuote 用实时行情补充当日K线
-// 仅在最后一根K线不是最近交易日时才调用实时行情API
+// mergeRealtimeQuote 用实时行情补充/更新当日K线
+// 场景1: 缓存里没有今天K线 → 追加
+// 场景2: 缓存里有今天K线但价格是盘中的 → 用收盘价更新
 func (s *SelectorService) mergeRealtimeQuote(symbol string, klines []models.KLineData) []models.KLineData {
 	if len(klines) == 0 {
 		return klines
@@ -367,55 +354,56 @@ func (s *SelectorService) mergeRealtimeQuote(symbol string, klines []models.KLin
 	lastTradeDate := s.marketSvc.GetLastTradeDate()
 	lastKline := klines[len(klines)-1]
 
-	// 如果最后一根K线已经是最近交易日，不需要补充
-	if lastKline.Time == lastTradeDate {
+	// 场景1: 最后一根K线不是最近交易日 → 需要追加
+	if lastKline.Time != lastTradeDate {
+		// 获取实时行情
+		quotes, err := s.marketSvc.GetStockDataWithOrderBook(symbol)
+		if err != nil || len(quotes) == 0 {
+			return klines
+		}
+		q := quotes[0]
+		if q.Price <= 0 || q.Open <= 0 {
+			return klines
+		}
+
+		klines = append(klines, models.KLineData{
+			Time:   lastTradeDate,
+			Open:   q.Open,
+			High:   q.High,
+			Low:    q.Low,
+			Close:  q.Price,
+			Volume: q.Volume,
+			Amount: q.Amount,
+		})
 		return klines
 	}
 
-	// 非交易日（周末/节假日）且缓存里没有最近交易日的数据，没法补
-	// 因为实时行情接口返回的也是最近交易日的收盘价快照
-	marketStatus := s.marketSvc.GetMarketStatus().Status
-	if marketStatus == "closed" && !s.isAfterTodayClose() {
-		// 休市日：不浪费API调用
-		return klines
-	}
-
-	// 获取实时行情
+	// 场景2: 最后一根K线是最近交易日 → 用实时行情校准收盘价
+	// (TDX日K在盘中可能是中间价，收盘后应更新为最终收盘价)
 	quotes, err := s.marketSvc.GetStockDataWithOrderBook(symbol)
 	if err != nil || len(quotes) == 0 {
 		return klines
 	}
 	q := quotes[0]
-
-	// 实时价格必须有效
-	if q.Price <= 0 || q.Open <= 0 {
+	if q.Price <= 0 {
 		return klines
 	}
 
-	// 合成最近交易日K线
-	todayKline := models.KLineData{
-		Time:   lastTradeDate,
-		Open:   q.Open,
-		High:   q.High,
-		Low:    q.Low,
-		Close:  q.Price,
-		Volume: q.Volume,
-		Amount: q.Amount,
+	// 只在收盘价有差异时更新（避免无意义的写入）
+	idx := len(klines) - 1
+	old := klines[idx]
+	priceDiff := q.Price - old.Close
+	if priceDiff > 0.001 || priceDiff < -0.001 {
+		klines[idx] = models.KLineData{
+			Time:   lastTradeDate,
+			Open:   q.Open,
+			High:   q.High,
+			Low:    q.Low,
+			Close:  q.Price,
+			Volume: q.Volume,
+			Amount: q.Amount,
+		}
 	}
 
-	// 追加到K线末尾
-	klines = append(klines, todayKline)
 	return klines
-}
-
-// isAfterTodayClose 判断当前是否是今天收盘后（>=15:00），且今天是交易日
-func (s *SelectorService) isAfterTodayClose() bool {
-	loc := time.FixedZone("CST", 8*60*60)
-	now := time.Now().In(loc)
-	// 今天必须是交易日
-	if s.marketSvc.GetLastTradeDate() != now.Format("2006-01-02") {
-		return false
-	}
-	// 时间需在15:00之后
-	return now.Hour() >= 15
 }

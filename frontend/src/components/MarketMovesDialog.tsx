@@ -198,7 +198,9 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
         setSelectedBoard(null);
         setLeaderResult(null);
         setLeaderError('');
-        setError('暂无可展示的板块异动数据');
+        setError(marketStatus?.status === 'trading'
+          ? '暂无可展示的板块异动数据'
+          : '非交易时段暂无实时数据，交易时段（9:30-15:00）将自动更新');
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : '获取板块异动失败';
@@ -207,7 +209,7 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
     } finally {
       setLoading(false);
     }
-  }, [loadBoardLeaders, loading]);
+  }, [loadBoardLeaders, loading, marketStatus]);
 
   const loadStockMoves = useCallback(async (nextType: StockMoveType) => {
     if (stockLoading) return; // 防止重复请求
@@ -222,7 +224,9 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
       };
       setStockMoves(normalized);
       if (!normalized.items.length) {
-        setStockError('暂无可展示的盘口异动数据');
+        setStockError(marketStatus?.status === 'trading'
+          ? '暂无可展示的盘口异动数据'
+          : '非交易时段暂无实时数据，交易时段（9:30-15:00）将自动更新');
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : '获取盘口异动失败';
@@ -231,7 +235,7 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
     } finally {
       setStockLoading(false);
     }
-  }, [stockLoading]);
+  }, [stockLoading, marketStatus]);
 
   useEffect(() => {
     if (!isOpen) return;

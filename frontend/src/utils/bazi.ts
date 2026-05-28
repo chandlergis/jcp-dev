@@ -273,7 +273,19 @@ export function calculateDailyFortune(
     '大江东去浪淘尽，A股盘前已开盘。',
     '股海无涯回头是岸，落袋为安方得平安。',
   ];
-  const poem = poems[Math.floor(Math.random() * poems.length)];
+
+  // 幸运数字：结合日柱每天变化
+  const baseNumbers = ELEMENT_NUMBERS[usefulElement];
+  const dayStemIdx = HEAVENLY_STEMS.indexOf(todayPillar.stem);
+  const dayBranchIdx = EARTHLY_BRANCHES.indexOf(todayPillar.branch);
+  const luckyNumbers = [
+    baseNumbers[dayStemIdx % baseNumbers.length],
+    (baseNumbers[0] + dayBranchIdx) % 10,
+  ];
+
+  // 诗句：基于日期确定性选取
+  const dateKey = date.getFullYear() * 10000 + (date.getMonth() + 1) * 100 + date.getDate();
+  const poem = poems[(dateKey + dayBranchIdx) % poems.length];
 
   return {
     pillars,
@@ -286,7 +298,7 @@ export function calculateDailyFortune(
     avoid,
     luckyDirection: ELEMENT_DIRECTION[usefulElement],
     luckyColor: ELEMENT_COLOR[usefulElement],
-    luckyNumbers: ELEMENT_NUMBERS[usefulElement],
+    luckyNumbers,
     usefulElement,
     marketAdvice,
     sectorHint,

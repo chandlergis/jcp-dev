@@ -1120,12 +1120,21 @@ func (ms *MarketService) fetchBoardFundFlowList(category string, page int, size 
 	items := make([]models.BoardFundFlowItem, 0, len(diffRows))
 	var updateTime string
 	for _, row := range diffRows {
+		changePercent := toFloat64Any(row["f3"])
+		mainNetInflow := toFloat64Any(row["f62"])
+
+		// 过滤掉所有数值为0的无效条目（非交易时段API返回空数据）
+		price := toFloat64Any(row["f2"])
+		if price == 0 && changePercent == 0 && mainNetInflow == 0 {
+			continue
+		}
+
 		item := models.BoardFundFlowItem{
 			Code:                 strings.TrimSpace(toStringLocal(row["f12"])),
 			Name:                 strings.TrimSpace(toStringLocal(row["f14"])),
-			Price:                toFloat64Any(row["f2"]),
-			ChangePercent:        toFloat64Any(row["f3"]),
-			MainNetInflow:        toFloat64Any(row["f62"]),
+			Price:                price,
+			ChangePercent:        changePercent,
+			MainNetInflow:        mainNetInflow,
 			MainNetInflowRatio:   toFloat64Any(row["f184"]),
 			SuperNetInflow:       toFloat64Any(row["f66"]),
 			SuperNetInflowRatio:  toFloat64Any(row["f69"]),
@@ -1219,13 +1228,23 @@ func (ms *MarketService) fetchStockMovesList(moveType string, page int, size int
 	diffRows := toMapSliceLocal(toSliceAnyLocal(data["diff"]))
 	items := make([]models.StockMoveItem, 0, len(diffRows))
 	var updateTime string
-	for idx, row := range diffRows {
+	rank := (page - 1) * size
+	for _, row := range diffRows {
+		price := toFloat64Any(row["f2"])
+		changePercent := toFloat64Any(row["f3"])
+
+		// 过滤掉所有数值为0的无效条目（非交易时段API返回空数据）
+		if price == 0 && changePercent == 0 {
+			continue
+		}
+		rank++
+
 		item := models.StockMoveItem{
-			Rank:               (page-1)*size + idx + 1,
+			Rank:               rank,
 			Code:               strings.TrimSpace(toStringLocal(row["f12"])),
 			Name:               strings.TrimSpace(toStringLocal(row["f14"])),
-			Price:              toFloat64Any(row["f2"]),
-			ChangePercent:      toFloat64Any(row["f3"]),
+			Price:              price,
+			ChangePercent:      changePercent,
 			Speed:              toFloat64Any(row["f22"]),
 			TurnoverRate:       toFloat64Any(row["f8"]),
 			Volume:             toInt64Any(row["f5"]),
@@ -1324,11 +1343,19 @@ func (ms *MarketService) fetchBoardLeaders(boardCode string, limit int) (models.
 	items := make([]models.BoardLeaderItem, 0, len(diffRows))
 	var updateTime string
 	for _, row := range diffRows {
+		price := toFloat64Any(row["f2"])
+		changePercent := toFloat64Any(row["f3"])
+
+		// 过滤掉所有数值为0的无效条目（非交易时段API返回空数据）
+		if price == 0 && changePercent == 0 {
+			continue
+		}
+
 		item := models.BoardLeaderItem{
 			Code:               strings.TrimSpace(toStringLocal(row["f12"])),
 			Name:               strings.TrimSpace(toStringLocal(row["f14"])),
-			Price:              toFloat64Any(row["f2"]),
-			ChangePercent:      toFloat64Any(row["f3"]),
+			Price:              price,
+			ChangePercent:      changePercent,
 			TurnoverRate:       toFloat64Any(row["f8"]),
 			MainNetInflow:      toFloat64Any(row["f62"]),
 			MainNetInflowRatio: toFloat64Any(row["f184"]),

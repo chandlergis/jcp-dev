@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, RefreshCw, TrendingUp, X } from 'lucide-react';
 import { GetBoardFundFlow, GetBoardLeaders, GetStockMoves } from '../../wailsjs/go/main/App';
 import { useMarketStatus } from '../hooks/useMarketStatus';
@@ -154,6 +154,13 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
     setAutoRefreshCountdown(refreshIntervalSeconds);
   }, [refreshIntervalSeconds]);
 
+  // 用 ref 做"防重复请求"守卫，避免 loading 状态变化导致回调重建
+  const loadingRef = useRef(false);
+  const stockLoadingRef = useRef(false);
+  // 用 ref 持有最新市场状态，避免 marketStatus 变化导致回调重建
+  const marketStatusRef = useRef(marketStatus?.status);
+  marketStatusRef.current = marketStatus?.status;
+
   const loadBoardLeaders = useCallback(async (boardCode: string) => {
     setLeaderLoading(true);
     setLeaderError('');
@@ -178,7 +185,8 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
   }, []);
 
   const loadBoardFlow = useCallback(async (nextCategory: BoardCategory, preferredBoardCode?: string) => {
-    if (loading) return; // 防止重复请求
+    if (loadingRef.current) return; // 防止重复请求
+    loadingRef.current = true;
     setLoading(true);
     setError('');
     try {
@@ -198,7 +206,7 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
         setSelectedBoard(null);
         setLeaderResult(null);
         setLeaderError('');
-        setError(marketStatus?.status === 'trading'
+        setError(marketStatusRef.current === 'trading'
           ? '暂无可展示的板块异动数据'
           : '非交易时段暂无实时数据，交易时段（9:30-15:00）将自动更新');
       }
@@ -207,12 +215,14 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
       setError(message);
       // 不清空现有数据，保持上次的结果
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
-  }, [loadBoardLeaders, loading, marketStatus]);
+  }, [loadBoardLeaders]);
 
   const loadStockMoves = useCallback(async (nextType: StockMoveType) => {
-    if (stockLoading) return; // 防止重复请求
+    if (stockLoadingRef.current) return; // 防止重复请求
+    stockLoadingRef.current = true;
     setStockLoading(true);
     setStockError('');
     try {
@@ -224,7 +234,7 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
       };
       setStockMoves(normalized);
       if (!normalized.items.length) {
-        setStockError(marketStatus?.status === 'trading'
+        setStockError(marketStatusRef.current === 'trading'
           ? '暂无可展示的盘口异动数据'
           : '非交易时段暂无实时数据，交易时段（9:30-15:00）将自动更新');
       }
@@ -233,9 +243,10 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
       setStockError(message);
       // 不清空现有数据，保持上次的结果
     } finally {
+      stockLoadingRef.current = false;
       setStockLoading(false);
     }
-  }, [stockLoading, marketStatus]);
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -256,38 +267,32 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
     setAutoRefreshCountdown(refreshIntervalSeconds);
   }, [refreshIntervalSeconds]);
 
-  // 倒计时（仅在自动刷新启用时跑）
+  // 用 ref 持有最新的刷新逻辑，避免定时器因依赖变化被频繁重建（导致卡顿）
+  const refreshFnRef = useRef<() => void>(() => {});
+  refreshFnRef.current = () => {
+    if (activeTab === 'stock') {
+      void loadStockMoves(stockMoveType);
+    } else {
+      void loadBoardFlow(category, selectedBoard?.code);
+    }
+  };
+
+  // 倒计时 + 自动刷新合并到一个定时器（仅依赖 isOpen 和刷新间隔，定时器稳定不重建）
   useEffect(() => {
     if (!isOpen || refreshIntervalSeconds <= 0) return;
+    setAutoRefreshCountdown(refreshIntervalSeconds);
     const timer = window.setInterval(() => {
-      setAutoRefreshCountdown(prev => (prev <= 1 ? refreshIntervalSeconds : prev - 1));
+      setAutoRefreshCountdown(prev => {
+        if (prev <= 1) {
+          // 倒计时归零，触发刷新
+          refreshFnRef.current();
+          return refreshIntervalSeconds;
+        }
+        return prev - 1;
+      });
     }, 1000);
     return () => window.clearInterval(timer);
   }, [isOpen, refreshIntervalSeconds]);
-
-  // 自动刷新（按市场状态决定是否启用）
-  useEffect(() => {
-    if (!isOpen || refreshIntervalSeconds <= 0) return;
-    const timer = window.setInterval(() => {
-      if (activeTab === 'stock') {
-        void loadStockMoves(stockMoveType);
-      } else {
-        void loadBoardFlow(category, selectedBoard?.code);
-      }
-      resetAutoRefreshCountdown();
-    }, refreshIntervalSeconds * 1000);
-    return () => window.clearInterval(timer);
-  }, [
-    isOpen,
-    activeTab,
-    stockMoveType,
-    category,
-    selectedBoard?.code,
-    loadBoardFlow,
-    loadStockMoves,
-    resetAutoRefreshCountdown,
-    refreshIntervalSeconds,
-  ]);
 
   const onChangeCategory = (nextCategory: BoardCategory) => {
     setCategory(nextCategory);

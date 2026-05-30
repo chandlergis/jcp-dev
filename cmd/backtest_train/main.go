@@ -47,11 +47,12 @@ func main() {
 	// 加载预训练模型
 	home, _ := os.UserHomeDir()
 	modelPath := filepath.Join(home, "Library", "Application Support", "jcp", "prediction_model.json")
-	model, scaler := loadModel(modelPath)
+	model, scaler, topFeatures := loadModel(modelPath)
 	if model == nil {
 		fmt.Println("模型加载失败，请先运行 go run ./cmd/trainmodel/ 训练模型")
 		return
 	}
+	fmt.Printf("模型加载成功 (特征筛选: %d 个)\n", len(topFeatures))
 	fmt.Println("模型加载成功")
 
 	// 获取所有股票
@@ -121,6 +122,10 @@ func main() {
 					features := backtest.ComputeFeatures(klinesUpTo, warmupDays)
 					if len(features) > 0 {
 						lastFeat := features[len(features)-1:]
+						// 应用特征筛选
+						if len(topFeatures) > 0 {
+							lastFeat = selectFeatures(lastFeat, topFeatures)
+						}
 						normFeat := scaler.Transform(lastFeat)
 						pred := model.Predict(normFeat)[0]
 						conf := math.Tanh(math.Abs(pred) / 0.005)
@@ -210,23 +215,24 @@ func getSignal(predReturn, confidence float64) string {
 	}
 }
 
-func loadModel(path string) (*backtest.GBMRegressor, *backtest.StandardScaler) {
+func loadModel(path string) (*backtest.GBMRegressor, *backtest.StandardScaler, []int) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var pf struct {
-		Model  *backtest.GBMRegressorSnapshot `json:"model"`
-		Scaler *backtest.ScalerSnapshot       `json:"scaler"`
+		Model       *backtest.GBMRegressorSnapshot `json:"model"`
+		Scaler      *backtest.ScalerSnapshot       `json:"scaler"`
+		TopFeatures []int                           `json:"top_features,omitempty"`
 	}
 	if err := json.Unmarshal(data, &pf); err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	model := &backtest.GBMRegressor{}
 	model.LoadSnapshot(pf.Model)
 	scaler := &backtest.StandardScaler{}
 	scaler.LoadSnapshot(pf.Scaler)
-	return model, scaler
+	return model, scaler, pf.TopFeatures
 }
 
 func loadAllStocks() []struct{ Symbol, Name string } {
@@ -336,4 +342,19 @@ func printSummary(trades []trade, sessionReturns []float64, totalTrades, totalWi
 		}
 	}
 	fmt.Printf("最大回撤:   %.2f%%\n", maxDD)
+}
+
+// selectFeatures 选择指定特征列
+func selectFeatures(X [][]float64, indices []int) [][]float64 {
+	result := make([][]float64, len(X))
+	for i, row := range X {
+		newRow := make([]float64, len(indices))
+		for j, idx := range indices {
+			if idx < len(row) {
+				newRow[j] = row[idx]
+			}
+		}
+		result[i] = newRow
+	}
+	return result
 }

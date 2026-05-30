@@ -14,17 +14,26 @@ import (
 
 var predLog = logger.New("prediction")
 
-// PredictionService 股价涨跌预测服务（GBM + 奖励因子）
+// PredictionService 股价涨跌预测服务（优化GBM + 奖励因子）
 type PredictionService struct {
 	mu          sync.RWMutex
 	model       *backtest.GBMRegressor
 	scaler      *backtest.StandardScaler
+	topFeatures []int // 选中的特征索引
 	isTrained    bool
 	trainStocks  int
 	trainSamples int
 	modelPath    string
-	// 奖励因子：追踪最近预测准确率
 	rewardTracker *RewardTracker
+}
+
+// predictionFile GBM模型持久化文件结构
+type predictionFile struct {
+	Model        *backtest.GBMRegressorSnapshot `json:"model"`
+	Scaler       *backtest.ScalerSnapshot       `json:"scaler"`
+	TopFeatures  []int                           `json:"top_features,omitempty"`
+	Stocks       int                             `json:"stocks"`
+	Samples      int                             `json:"samples"`
 }
 
 // RewardTracker 奖励因子追踪器
@@ -76,14 +85,6 @@ func (rt *RewardTracker) GetFactor(symbol string) float64 {
 	return 0.5 + acc
 }
 
-// predictionFile GBM模型持久化文件结构
-type predictionFile struct {
-	Model  *backtest.GBMRegressorSnapshot `json:"model"`
-	Scaler *backtest.ScalerSnapshot       `json:"scaler"`
-	Stocks int                             `json:"stocks"`
-	Samples int                            `json:"samples"`
-}
-
 // predictionLSTMFile LSTM模型持久化文件结构
 type predictionLSTMFile struct {
 	Model  *backtest.LSTMSnapshot `json:"model"`
@@ -131,6 +132,7 @@ func (ps *PredictionService) LoadFromFile() bool {
 	ps.mu.Lock()
 	ps.model = model
 	ps.scaler = scaler
+	ps.topFeatures = pf.TopFeatures
 	ps.isTrained = true
 	ps.trainStocks = pf.Stocks
 	ps.trainSamples = pf.Samples
@@ -148,10 +150,11 @@ func (ps *PredictionService) SaveToFile() error {
 		return nil
 	}
 	pf := predictionFile{
-		Model:   ps.model.Snapshot(),
-		Scaler:  ps.scaler.Snapshot(),
-		Stocks:  ps.trainStocks,
-		Samples: ps.trainSamples,
+		Model:       ps.model.Snapshot(),
+		Scaler:      ps.scaler.Snapshot(),
+		TopFeatures: ps.topFeatures,
+		Stocks:      ps.trainStocks,
+		Samples:     ps.trainSamples,
 	}
 	ps.mu.RUnlock()
 
@@ -268,7 +271,7 @@ func (ps *PredictionService) TrainOnFetcher(fetcher interface {
 	scaler.Fit(allFeatures)
 	normFeatures := scaler.Transform(allFeatures)
 
-	// --- 训练 GBM ---
+	// --- 训练 GBM（原始最优参数） ---
 	predLog.Info("训练GBM模型...")
 	gbmModel := backtest.NewGBMRegressor(backtest.GBMConfig{
 		MaxDepth:     4,
@@ -290,7 +293,7 @@ func (ps *PredictionService) TrainOnFetcher(fetcher interface {
 	ps.trainSamples = len(allFeatures)
 	ps.mu.Unlock()
 
-	predLog.Info("预测模型训练完成: %d支股票, %d样本 (GBM)", trainedStocks, len(allFeatures))
+	predLog.Info("预测模型训练完成: %d支股票, %d样本", trainedStocks, len(allFeatures))
 	return nil
 }
 
@@ -388,4 +391,43 @@ func getSignal(predReturn float64, confidence float64) string {
 	default:
 		return "观望"
 	}
+}
+
+// selectFeatures 选择指定特征列
+func selectFeatures(X [][]float64, indices []int) [][]float64 {
+	result := make([][]float64, len(X))
+	for i, row := range X {
+		newRow := make([]float64, len(indices))
+		for j, idx := range indices {
+			if idx < len(row) {
+				newRow[j] = row[idx]
+			}
+		}
+		result[i] = newRow
+	}
+	return result
+}
+
+// selectTopFeatures 选择最重要的K个特征
+func selectTopFeatures(importances []float64, k int) []int {
+	type fi struct {
+		idx int
+		imp float64
+	}
+	var items []fi
+	for i, v := range importances {
+		items = append(items, fi{i, v})
+	}
+	for i := 0; i < len(items); i++ {
+		for j := i + 1; j < len(items); j++ {
+			if items[j].imp > items[i].imp {
+				items[i], items[j] = items[j], items[i]
+			}
+		}
+	}
+	result := make([]int, k)
+	for i := 0; i < k && i < len(items); i++ {
+		result[i] = items[i].idx
+	}
+	return result
 }

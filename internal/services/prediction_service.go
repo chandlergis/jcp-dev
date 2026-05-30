@@ -292,32 +292,19 @@ func (ps *PredictionService) TrainOnFetcher(fetcher interface {
 	})
 	gbmModel.Fit(normFeatures, allReturns)
 
-	// --- 训练 LSTM ---
-	predLog.Info("训练LSTM模型...")
-	inputSize := len(allFeatures[0])
-	lstmConfig := backtest.DefaultLSTMConfig(inputSize)
-	lstmConfig.HiddenSize = 32
-	lstmConfig.SeqLen = 10
-	lstmConfig.Epochs = 50
-	lstmConfig.BatchSize = 64
-	lstmConfig.LearningRate = 0.001
-	lstmModel := backtest.NewLSTMModel(lstmConfig)
-	lstmModel.Fit(normFeatures, allReturns)
-
 	ps.mu.Lock()
 	ps.model = gbmModel
 	ps.scaler = scaler
-	ps.lstm = lstmModel
 	ps.isTrained = true
 	ps.trainStocks = trainedStocks
 	ps.trainSamples = len(allFeatures)
 	ps.mu.Unlock()
 
-	predLog.Info("预测模型训练完成: %d支股票, %d样本 (GBM+LSTM)", trainedStocks, len(allFeatures))
+	predLog.Info("预测模型训练完成: %d支股票, %d样本 (GBM)", trainedStocks, len(allFeatures))
 	return nil
 }
 
-// Predict 对单支股票的K线数据进行预测（融合GBM和LSTM）
+// Predict 对单支股票的K线数据进行预测（纯GBM）
 func (ps *PredictionService) Predict(klines []models.KLineData) *models.PredictionResult {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
@@ -343,27 +330,10 @@ func (ps *PredictionService) Predict(klines []models.KLineData) *models.Predicti
 
 	lastFeat := features[len(features)-1:]
 	normFeat := ps.scaler.Transform(lastFeat)
-
-	// GBM 预测
-	gbmPred := ps.model.Predict(normFeat)[0]
-
-	// LSTM 预测（如果有模型且特征足够）
-	lstmPred := 0.0
-	lstmWeight := 0.0
-	if ps.lstm != nil && len(features) >= 10 {
-		lstmResult := ps.lstm.Predict(features)
-		if len(lstmResult) > 0 {
-			lstmPred = lstmResult[0]
-			lstmWeight = 0.4 // LSTM 权重 40%
-		}
-	}
-
-	// 融合预测：GBM 60% + LSTM 40%（如果有LSTM）
-	predReturn := gbmPred*(1-lstmWeight) + lstmPred*lstmWeight
-
+	predReturn := ps.model.Predict(normFeat)[0]
 	confidence := math.Min(math.Abs(predReturn)/0.03, 1.0)
 
-	predLog.Debug("预测: GBM=%.6f, LSTM=%.6f, 融合=%.6f", gbmPred, lstmPred, predReturn)
+	predLog.Debug("预测: GBM=%.6f, 收益=%.3f%%", predReturn, predReturn*100)
 
 	direction := "跌"
 	if predReturn > 0 {

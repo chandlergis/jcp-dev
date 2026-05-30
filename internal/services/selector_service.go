@@ -331,7 +331,7 @@ func (s *SelectorService) GetPredictionService() *PredictionService {
 	return s.predictor
 }
 
-// GetStockPrediction 获取单支股票的AI预测
+// GetStockPrediction 获取单支股票的AI预测（带奖励因子）
 func (s *SelectorService) GetStockPrediction(symbol string) *models.PredictionResult {
 	if s.predictor == nil || !s.predictor.IsTrained() {
 		return nil
@@ -342,7 +342,7 @@ func (s *SelectorService) GetStockPrediction(symbol string) *models.PredictionRe
 		return nil
 	}
 
-	return s.predictor.Predict(klines)
+	return s.predictor.PredictWithSymbol(klines, symbol)
 }
 
 // getTrainStockCodes 从候选股票中选取训练用的股票代码

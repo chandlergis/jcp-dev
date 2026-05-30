@@ -14,20 +14,66 @@ import (
 
 var predLog = logger.New("prediction")
 
-// PredictionService 股价涨跌预测服务（GBM + LSTM 双模型）
+// PredictionService 股价涨跌预测服务（GBM + 奖励因子）
 type PredictionService struct {
 	mu          sync.RWMutex
-	// GBM 模型（保留原有）
 	model       *backtest.GBMRegressor
 	scaler      *backtest.StandardScaler
-	// LSTM 模型
-	lstm        *backtest.LSTMModel
-	// 状态
 	isTrained    bool
 	trainStocks  int
 	trainSamples int
-	modelPath    string // GBM 模型文件路径
-	lstmPath     string // LSTM 模型文件路径
+	modelPath    string
+	// 奖励因子：追踪最近预测准确率
+	rewardTracker *RewardTracker
+}
+
+// RewardTracker 奖励因子追踪器
+type RewardTracker struct {
+	mu       sync.RWMutex
+	records  map[string][]bool // symbol -> 最近N次预测是否正确
+	maxLen   int               // 每支股票最多追踪多少次
+}
+
+func NewRewardTracker() *RewardTracker {
+	return &RewardTracker{
+		records: make(map[string][]bool),
+		maxLen:  20,
+	}
+}
+
+// Record 记录一次预测结果
+func (rt *RewardTracker) Record(symbol string, correct bool) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	recs := rt.records[symbol]
+	recs = append(recs, correct)
+	if len(recs) > rt.maxLen {
+		recs = recs[len(recs)-rt.maxLen:]
+	}
+	rt.records[symbol] = recs
+}
+
+// GetFactor 获取奖励因子（0.5~1.5）
+// 准确率高 → 因子>1（增强信号）
+// 准确率低 → 因子<1（减弱信号）
+func (rt *RewardTracker) GetFactor(symbol string) float64 {
+	rt.mu.RLock()
+	defer rt.mu.RUnlock()
+	recs := rt.records[symbol]
+	if len(recs) < 5 {
+		return 1.0 // 数据不足，不调整
+	}
+	correct := 0
+	for _, r := range recs {
+		if r {
+			correct++
+		}
+	}
+	acc := float64(correct) / float64(len(recs))
+	// 0.5准确率 → 因子1.0（中性）
+	// 0.7准确率 → 因子1.2（增强）
+	// 0.3准确率 → 因子0.8（减弱）
+	return 0.5 + acc
 }
 
 // predictionFile GBM模型持久化文件结构
@@ -48,17 +94,14 @@ type predictionLSTMFile struct {
 // NewPredictionService 创建预测服务
 func NewPredictionService(dataDir string) *PredictionService {
 	return &PredictionService{
-		modelPath: filepath.Join(dataDir, "prediction_model.json"),
-		lstmPath:  filepath.Join(dataDir, "prediction_model_lstm.json"),
+		modelPath:     filepath.Join(dataDir, "prediction_model.json"),
+		rewardTracker: NewRewardTracker(),
 	}
 }
 
 // Init 初始化：尝试从文件加载，失败则后台训练
 func (ps *PredictionService) Init(marketSvc *MarketService) {
-	gbmLoaded := ps.LoadFromFile()
-	lstmLoaded := ps.LoadLSTMFromFile()
-
-	if gbmLoaded && lstmLoaded {
+	if ps.LoadFromFile() {
 		return
 	}
 	// 文件不存在或加载失败，后台训练
@@ -97,31 +140,6 @@ func (ps *PredictionService) LoadFromFile() bool {
 	return true
 }
 
-// LoadLSTMFromFile 从文件加载LSTM模型
-func (ps *PredictionService) LoadLSTMFromFile() bool {
-	data, err := os.ReadFile(ps.lstmPath)
-	if err != nil {
-		predLog.Info("LSTM模型文件不存在，需要训练")
-		return false
-	}
-
-	var lf predictionLSTMFile
-	if err := json.Unmarshal(data, &lf); err != nil {
-		predLog.Warn("LSTM模型文件解析失败: %v", err)
-		return false
-	}
-
-	lstm := &backtest.LSTMModel{}
-	lstm.LoadSnapshot(lf.Model)
-
-	ps.mu.Lock()
-	ps.lstm = lstm
-	ps.mu.Unlock()
-
-	predLog.Info("从文件加载LSTM模型成功: %d支股票, %d样本", lf.Stocks, lf.Samples)
-	return true
-}
-
 // SaveToFile 保存GBM模型到文件
 func (ps *PredictionService) SaveToFile() error {
 	ps.mu.RLock()
@@ -146,29 +164,6 @@ func (ps *PredictionService) SaveToFile() error {
 	return os.WriteFile(ps.modelPath, data, 0644)
 }
 
-// SaveLSTMToFile 保存LSTM模型到文件
-func (ps *PredictionService) SaveLSTMToFile() error {
-	ps.mu.RLock()
-	if ps.lstm == nil {
-		ps.mu.RUnlock()
-		return nil
-	}
-	lf := predictionLSTMFile{
-		Model:   ps.lstm.Snapshot(),
-		Stocks:  ps.trainStocks,
-		Samples: ps.trainSamples,
-	}
-	ps.mu.RUnlock()
-
-	data, err := json.Marshal(lf)
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(ps.lstmPath)
-	os.MkdirAll(dir, 0755)
-	return os.WriteFile(ps.lstmPath, data, 0644)
-}
-
 // trainInBackground 后台训练模型
 func (ps *PredictionService) trainInBackground(marketSvc *MarketService) {
 	predLog.Info("后台训练AI预测模型...")
@@ -188,11 +183,6 @@ func (ps *PredictionService) trainInBackground(marketSvc *MarketService) {
 		predLog.Warn("保存GBM模型文件失败: %v", err)
 	} else {
 		predLog.Info("GBM模型已保存到: %s", ps.modelPath)
-	}
-	if err := ps.SaveLSTMToFile(); err != nil {
-		predLog.Warn("保存LSTM模型文件失败: %v", err)
-	} else {
-		predLog.Info("LSTM模型已保存到: %s", ps.lstmPath)
 	}
 }
 
@@ -306,6 +296,11 @@ func (ps *PredictionService) TrainOnFetcher(fetcher interface {
 
 // Predict 对单支股票的K线数据进行预测（纯GBM）
 func (ps *PredictionService) Predict(klines []models.KLineData) *models.PredictionResult {
+	return ps.PredictWithSymbol(klines, "")
+}
+
+// PredictWithSymbol 带奖励因子的预测
+func (ps *PredictionService) PredictWithSymbol(klines []models.KLineData, symbol string) *models.PredictionResult {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
 
@@ -331,21 +326,37 @@ func (ps *PredictionService) Predict(klines []models.KLineData) *models.Predicti
 	lastFeat := features[len(features)-1:]
 	normFeat := ps.scaler.Transform(lastFeat)
 	predReturn := ps.model.Predict(normFeat)[0]
-	// 置信度：用 tanh 映射，0.5%预测→0.5置信度，2%→0.9
-	confidence := math.Tanh(math.Abs(predReturn) / 0.005)
 
-	predLog.Debug("预测: GBM=%.6f, 收益=%.3f%%", predReturn, predReturn*100)
+	// 奖励因子：根据最近预测准确率调整
+	rewardFactor := 1.0
+	if ps.rewardTracker != nil && symbol != "" {
+		rewardFactor = ps.rewardTracker.GetFactor(symbol)
+	}
+	// 奖励因子调整预测值（增强/减弱信号）
+	adjustedPred := predReturn * rewardFactor
+
+	// 置信度
+	confidence := math.Tanh(math.Abs(adjustedPred) / 0.005)
+
+	predLog.Debug("预测 %s: GBM=%.6f, 奖励因子=%.2f, 调整后=%.6f", symbol, predReturn, rewardFactor, adjustedPred)
 
 	direction := "跌"
-	if predReturn > 0 {
+	if adjustedPred > 0 {
 		direction = "涨"
 	}
 
 	return &models.PredictionResult{
 		Direction:  direction,
-		Return:     predReturn * 100,
+		Return:     adjustedPred * 100,
 		Confidence: confidence,
-		Signal:     getSignal(predReturn, confidence),
+		Signal:     getSignal(adjustedPred, confidence),
+	}
+}
+
+// RecordPredictionResult 记录预测结果（用于奖励因子）
+func (ps *PredictionService) RecordPredictionResult(symbol string, predictedUp bool, actualUp bool) {
+	if ps.rewardTracker != nil {
+		ps.rewardTracker.Record(symbol, predictedUp == actualUp)
 	}
 }
 

@@ -336,6 +336,128 @@ func ComputeFeatures(klines []models.KLineData, warmupDays int) [][]float64 {
 		}
 		feat = append(feat, float64(streak)/10.0) // 归一化
 
+		// === 趋势跟随特征（解决强趋势股票误判卖出的问题） ===
+
+		// ADX 趋势强度（14日）
+		adxVal, plusDI, minusDI := ADX(highs, lows, closes, 14)
+		feat = append(feat, adxVal[i]/100.0)          // ADX归一化（>0.5强趋势）
+		feat = append(feat, (plusDI[i]-minusDI[i])/100) // DI差值（正=上涨趋势）
+
+		// 均线排列得分（多头排列=强上涨趋势）
+		maAlign := 0.0
+		if ma5[i] > ma10[i] && ma10[i] > ma20[i] && ma20[i] > ma60[i] {
+			maAlign = 1.0 // 完美多头排列
+		} else if ma5[i] < ma10[i] && ma10[i] < ma20[i] && ma20[i] < ma60[i] {
+			maAlign = -1.0 // 完美空头排列
+		} else if ma5[i] > ma10[i] && ma10[i] > ma20[i] {
+			maAlign = 0.5 // 短期多头
+		} else if ma5[i] < ma10[i] && ma10[i] < ma20[i] {
+			maAlign = -0.5 // 短期空头
+		}
+		feat = append(feat, maAlign)
+
+		// 趋势持续性：20日收益率的符号一致性
+		trendPersist := 0.0
+		if i >= 20 {
+			posDays := 0
+			for j := i - 19; j <= i; j++ {
+				if closes[j] > closes[j-1] {
+					posDays++
+				}
+			}
+			trendPersist = (float64(posDays)/20.0 - 0.5) * 2 // -1到1，正=上涨趋势
+		}
+		feat = append(feat, trendPersist)
+
+		// 收益率趋势：5日平均收益率 vs 20日平均收益率
+		retTrend := 0.0
+		if i >= 20 {
+			ret5Avg := 0.0
+			ret20Avg := 0.0
+			for j := i - 4; j <= i; j++ {
+				if closes[j-1] > 0 {
+					ret5Avg += (closes[j] - closes[j-1]) / closes[j-1]
+				}
+			}
+			for j := i - 19; j <= i; j++ {
+				if closes[j-1] > 0 {
+					ret20Avg += (closes[j] - closes[j-1]) / closes[j-1]
+				}
+			}
+			ret5Avg /= 5
+			ret20Avg /= 20
+			if ret20Avg != 0 {
+				retTrend = ret5Avg / math.Abs(ret20Avg) // >1表示短期动量增强
+			}
+		}
+		feat = append(feat, clamp(retTrend, -3, 3))
+
+		// 量价配合度：上涨时放量=健康趋势
+		vpConfirm := 0.0
+		if i >= 10 {
+			upVolSum := 0.0
+			downVolSum := 0.0
+			upCount := 0
+			downCount := 0
+			for j := i - 9; j <= i; j++ {
+				if closes[j] > closes[j-1] {
+					upVolSum += float64(volumes[j])
+					upCount++
+				} else {
+					downVolSum += float64(volumes[j])
+					downCount++
+				}
+			}
+			if upCount > 0 && downCount > 0 {
+				avgUpVol := upVolSum / float64(upCount)
+				avgDownVol := downVolSum / float64(downCount)
+				if avgDownVol > 0 {
+					vpConfirm = (avgUpVol/avgDownVol - 1) // >0表示上涨放量
+				}
+			}
+		}
+		feat = append(feat, clamp(vpConfirm, -2, 2))
+
+		// 价格相对20日高点位置（强趋势股票在高位）
+		priceVsHigh := 0.0
+		if i >= 20 {
+			high20 := maxInWindow(highs, i-19, i)
+			low20 := minInWindow(lows, i-19, i)
+			if high20 > low20 {
+				priceVsHigh = (closes[i] - low20) / (high20 - low20)
+			}
+		}
+		feat = append(feat, priceVsHigh)
+
+		// 收益率自相关（动量持续性指标）
+		autocorr := 0.0
+		if i >= 20 {
+			rets := make([]float64, 20)
+			for j := 0; j < 20; j++ {
+				idx := i - 19 + j
+				if closes[idx-1] > 0 {
+					rets[j] = (closes[idx] - closes[idx-1]) / closes[idx-1]
+				}
+			}
+			meanR := 0.0
+			for _, r := range rets {
+				meanR += r
+			}
+			meanR /= 20
+			cov := 0.0
+			varR := 0.0
+			for j := 1; j < 20; j++ {
+				d1 := rets[j-1] - meanR
+				d2 := rets[j] - meanR
+				cov += d1 * d2
+				varR += d1 * d1
+			}
+			if varR > 0 {
+				autocorr = cov / varR // 正=动量持续，负=均值回归
+			}
+		}
+		feat = append(feat, clamp(autocorr, -1, 1))
+
 		allFeatures = append(allFeatures, feat)
 	}
 
@@ -539,6 +661,54 @@ func ATR(highs, lows, closes []float64, period int) []float64 {
 		}
 	}
 	return SMA(tr, period)
+}
+
+// ADX 平均方向性指数（趋势强度指标）
+func ADX(highs, lows, closes []float64, period int) ([]float64, []float64, []float64) {
+	n := len(closes)
+	plusDM := make([]float64, n)
+	minusDM := make([]float64, n)
+	tr := make([]float64, n)
+
+	for i := 1; i < n; i++ {
+		highDiff := highs[i] - highs[i-1]
+		lowDiff := lows[i-1] - lows[i]
+
+		if highDiff > lowDiff && highDiff > 0 {
+			plusDM[i] = highDiff
+		}
+		if lowDiff > highDiff && lowDiff > 0 {
+			minusDM[i] = lowDiff
+		}
+
+		hl := highs[i] - lows[i]
+		hc := math.Abs(highs[i] - closes[i-1])
+		lc := math.Abs(lows[i] - closes[i-1])
+		tr[i] = math.Max(hl, math.Max(hc, lc))
+	}
+
+	// 平滑
+	smoothTR := EMA(tr, period)
+	smoothPlusDM := EMA(plusDM, period)
+	smoothMinusDM := EMA(minusDM, period)
+
+	plusDI := make([]float64, n)
+	minusDI := make([]float64, n)
+	dx := make([]float64, n)
+
+	for i := 0; i < n; i++ {
+		if smoothTR[i] > 0 {
+			plusDI[i] = 100 * smoothPlusDM[i] / smoothTR[i]
+			minusDI[i] = 100 * smoothMinusDM[i] / smoothTR[i]
+		}
+		sum := plusDI[i] + minusDI[i]
+		if sum > 0 {
+			dx[i] = 100 * math.Abs(plusDI[i]-minusDI[i]) / sum
+		}
+	}
+
+	adx := EMA(dx, period)
+	return adx, plusDI, minusDI
 }
 
 // KDJ 随机指标

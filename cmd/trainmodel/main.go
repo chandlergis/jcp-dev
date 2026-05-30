@@ -68,16 +68,6 @@ func main() {
 		fmt.Printf("GBM 模型已保存: %s (%.0f KB)\n", gbmPath, float64(info.Size())/1024)
 	}
 
-	// 保存 LSTM
-	if err := ps.SaveLSTMToFile(); err != nil {
-		fmt.Printf("保存LSTM模型失败: %v\n", err)
-		os.Exit(1)
-	}
-	lstmPath := filepath.Join(dataDir, "prediction_model_lstm.json")
-	if info, err := os.Stat(lstmPath); err == nil {
-		fmt.Printf("LSTM 模型已保存: %s (%.0f KB)\n", lstmPath, float64(info.Size())/1024)
-	}
-
 	fmt.Println()
-	fmt.Println("运行时预测将融合两个模型：GBM 60%% + LSTM 40%%")
+	fmt.Println("模型训练完成，包含趋势特征 + 奖励因子")
 }

@@ -1,35 +1,30 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
-	"sort"
-	"time"
+	"os"
+	"path/filepath"
 
 	"github.com/run-bigpig/jcp/internal/backtest"
-	"github.com/run-bigpig/jcp/internal/models"
 	"github.com/run-bigpig/jcp/internal/services"
 )
 
 const (
-	initialCapital = 1000000.0 // 100万
-	maxTrades      = 10        // 最大交易次数
-	testDays       = 50        // 回测天数
-	warmupDays     = 60        // 特征计算预热
-	holdDays       = 3         // 持有天数
-	trainDays      = 150       // 用于训练的历史天数
+	initialCapital = 1000000.0
+	maxTrades      = 10
+	testDays       = 50
+	warmupDays     = 60
+	holdDays       = 3
+	numSessions    = 10 // 模拟10轮训练营
 )
-
-type stockKline struct {
-	code   string
-	name   string
-	klines []models.KLineData
-}
 
 type trade struct {
 	stockName string
 	stockCode string
+	sessionID int
 	buyDay    int
 	buyPrice  float64
 	sellDay   int
@@ -39,216 +34,164 @@ type trade struct {
 	signal    string
 }
 
-type dailySignal struct {
-	day       int
-	code      string
-	name      string
-	predRet   float64
-	signal    string
-	confidence float64
-}
-
 func main() {
 	fmt.Println("========================================")
-	fmt.Println("  K线训练营自动回测")
+	fmt.Println("  K线训练营模拟回测（随机选股）")
 	fmt.Println("========================================")
 	fmt.Printf("初始资金: %.0f 元\n", initialCapital)
-	fmt.Printf("最大交易: %d 次\n", maxTrades)
-	fmt.Printf("回测周期: %d 个交易日\n", testDays)
+	fmt.Printf("每轮最大交易: %d 次\n", maxTrades)
+	fmt.Printf("每轮交易天数: %d 天\n", testDays)
+	fmt.Printf("模拟轮数: %d 轮\n", numSessions)
 	fmt.Println()
 
-	// 1. 获取股票
-	stocks := loadStocks()
-	fmt.Printf("股票池: %d 支\n", len(stocks))
-
-	// 2. 获取K线数据
-	var allData []stockKline
-	for _, s := range stocks {
-		fmt.Printf("获取 %s %s ...", s.Symbol, s.Name)
-		klines, err := services.NewMarketService().GetKLineData(s.Symbol, "1d", trainDays+testDays+warmupDays+holdDays+10)
-		if err != nil || len(klines) < trainDays+warmupDays {
-			fmt.Println(" 跳过")
-			continue
-		}
-		fmt.Printf(" OK (%d天)\n", len(klines))
-		allData = append(allData, stockKline{s.Symbol, s.Name, klines})
-	}
-	fmt.Printf("有效股票: %d 支\n\n", len(allData))
-
-	// 3. 训练模型（用前 trainDays 天数据）
-	fmt.Println("--- 训练预测模型 ---")
-	model, scaler := trainModel(allData, trainDays)
+	// 加载预训练模型
+	home, _ := os.UserHomeDir()
+	modelPath := filepath.Join(home, "Library", "Application Support", "jcp", "prediction_model.json")
+	model, scaler := loadModel(modelPath)
 	if model == nil {
-		fmt.Println("模型训练失败")
+		fmt.Println("模型加载失败，请先运行 go run ./cmd/trainmodel/ 训练模型")
 		return
 	}
-	fmt.Println("模型训练完成\n")
+	fmt.Println("模型加载成功")
 
-	// 4. 模拟回测
-	fmt.Println("--- 开始回测 ---")
-	cash := initialCapital
-	var holding *trade
-	var closedTrades []trade
-	var equityCurve []float64
+	// 获取所有股票
+	ms := services.NewMarketService()
+	allStocks := loadAllStocks()
+	fmt.Printf("股票池: %d 支\n\n", len(allStocks))
 
-	// 回测每天
-	for day := 0; day < testDays; day++ {
-		// 如果持仓，检查是否到期卖出
-		if holding != nil && day >= holding.buyDay+holdDays {
-			// 找到卖出价
-			sellPrice := getPriceAtDay(allData, holding.stockCode, trainDays+day)
-			if sellPrice > 0 {
+	// 汇总
+	totalTrades := 0
+	totalWins := 0
+	totalProfit := 0.0
+	totalLoss := 0.0
+	var allTrades []trade
+	var sessionReturns []float64
+
+	for session := 1; session <= numSessions; session++ {
+		fmt.Printf("=== 第 %d 轮 ===\n", session)
+
+		// 随机选一支股票
+		stock := allStocks[rand.Intn(len(allStocks))]
+		fmt.Printf("选股: %s %s\n", stock.Name, stock.Symbol)
+
+		// 获取K线数据
+		klines, err := ms.GetKLineData(stock.Symbol, "1d", warmupDays+testDays+holdDays+10)
+		if err != nil || len(klines) < warmupDays+testDays {
+			fmt.Printf("数据不足，跳过\n\n")
+			continue
+		}
+
+		// 模拟交易
+		cash := initialCapital
+		var holding *trade
+		var sessionTrades []trade
+
+		for day := 0; day < testDays; day++ {
+			// 持仓到期卖出
+			if holding != nil && day >= holding.buyDay+holdDays {
+				sellIdx := warmupDays + day
+				if sellIdx < len(klines) {
+					sellPrice := klines[sellIdx].Close
+					ret := (sellPrice - holding.buyPrice) / holding.buyPrice
+					profit := cash * ret
+					cash += profit
+					t := trade{
+						stockName: holding.stockName,
+						stockCode: holding.stockCode,
+						sessionID: session,
+						buyDay:    holding.buyDay,
+						buyPrice:  holding.buyPrice,
+						sellDay:   day,
+						sellPrice: sellPrice,
+						returns:   ret,
+						profit:    profit,
+						signal:    holding.signal,
+					}
+					sessionTrades = append(sessionTrades, t)
+					fmt.Printf("  [Day %2d] 卖出 @ %.2f, 收益: %+.2f%%, 盈亏: %+.0f\n",
+						day, sellPrice, ret*100, profit)
+					holding = nil
+				}
+			}
+
+			// 没有持仓，用AI预测决定是否买入
+			if holding == nil && len(sessionTrades) < maxTrades {
+				klinesUpTo := klines[:warmupDays+day]
+				if len(klinesUpTo) >= warmupDays+holdDays+5 {
+					features := backtest.ComputeFeatures(klinesUpTo, warmupDays)
+					if len(features) > 0 {
+						lastFeat := features[len(features)-1:]
+						normFeat := scaler.Transform(lastFeat)
+						pred := model.Predict(normFeat)[0]
+						conf := math.Tanh(math.Abs(pred) / 0.005)
+						sig := getSignal(pred, conf)
+
+						// 只在买入信号时交易
+						if sig == "买入" || sig == "强买入" {
+							buyIdx := warmupDays + day
+							if buyIdx < len(klines) {
+								buyPrice := klines[buyIdx].Close
+								holding = &trade{
+									stockName: stock.Name,
+									stockCode: stock.Symbol,
+									buyDay:    day,
+									buyPrice:  buyPrice,
+									signal:    sig,
+								}
+								fmt.Printf("  [Day %2d] 买入 @ %.2f, 信号: %s, 预测: %+.2f%%\n",
+									day, buyPrice, sig, pred*100)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// 如果还有持仓，强制平仓
+		if holding != nil {
+			sellIdx := warmupDays + testDays - 1
+			if sellIdx < len(klines) {
+				sellPrice := klines[sellIdx].Close
 				ret := (sellPrice - holding.buyPrice) / holding.buyPrice
 				profit := cash * ret
 				cash += profit
-				closedTrades = append(closedTrades, trade{
-					stockName:  holding.stockName,
-					stockCode:  holding.stockCode,
-					buyDay:     holding.buyDay,
-					buyPrice:   holding.buyPrice,
-					sellDay:    day,
-					sellPrice:  sellPrice,
-					returns:    ret,
-					profit:     profit,
-					signal:     holding.signal,
+				sessionTrades = append(sessionTrades, trade{
+					stockName: holding.stockName,
+					stockCode: holding.stockCode,
+					sessionID: session,
+					buyDay:    holding.buyDay,
+					buyPrice:  holding.buyPrice,
+					sellDay:   testDays,
+					sellPrice: sellPrice,
+					returns:   ret,
+					profit:    profit,
+					signal:    holding.signal,
 				})
-				fmt.Printf("[Day %2d] 卖出 %s @ %.2f, 收益: %+.2f%%, 盈亏: %+.0f\n",
-					day, holding.stockName, sellPrice, ret*100, profit)
-			}
-			holding = nil
-		}
-
-		// 如果没有持仓且还有交易次数，寻找买入机会
-		if holding == nil && len(closedTrades)/2 < maxTrades/2 {
-			var candidates []dailySignal
-			for _, sd := range allData {
-				klines := getKlinesUpToDay(sd.klines, trainDays+day)
-				if len(klines) < warmupDays+holdDays+5 {
-					continue
-				}
-				features := backtest.ComputeFeatures(klines, warmupDays)
-				if len(features) == 0 {
-					continue
-				}
-				lastFeat := features[len(features)-1:]
-				normFeat := scaler.Transform(lastFeat)
-				pred := model.Predict(normFeat)[0]
-				conf := math.Tanh(math.Abs(pred) / 0.005)
-
-				sig := getSignal(pred, conf)
-				if sig == "买入" || sig == "强买入" {
-					candidates = append(candidates, dailySignal{
-						day:        day,
-						code:       sd.code,
-						name:       sd.name,
-						predRet:    pred,
-						signal:     sig,
-						confidence: conf,
-					})
-				}
-			}
-
-			// 按预测收益排序，选最强的
-			if len(candidates) > 0 {
-				sort.Slice(candidates, func(i, j int) bool {
-					return candidates[i].predRet > candidates[j].predRet
-				})
-				best := candidates[0]
-				buyPrice := getPriceAtDay(allData, best.code, trainDays+day)
-				if buyPrice > 0 {
-					holding = &trade{
-						stockName: best.name,
-						stockCode: best.code,
-						buyDay:    day,
-						buyPrice:  buyPrice,
-						signal:    best.signal,
-					}
-					fmt.Printf("[Day %2d] 买入 %s @ %.2f, 信号: %s, 预测收益: %+.2f%%, 置信度: %.0f%%\n",
-						day, best.name, buyPrice, best.signal, best.predRet*100, best.confidence*100)
-				}
+				fmt.Printf("  [Day %2d] 强制平仓 @ %.2f, 收益: %+.2f%%\n",
+					testDays, sellPrice, ret*100)
 			}
 		}
 
-		// 记录权益
-		equity := cash
-		if holding != nil {
-			curPrice := getPriceAtDay(allData, holding.stockCode, trainDays+day)
-			if curPrice > 0 {
-				equity = cash * (1 + (curPrice-holding.buyPrice)/holding.buyPrice)
+		// 统计本轮
+		sessionReturn := (cash - initialCapital) / initialCapital * 100
+		sessionReturns = append(sessionReturns, sessionReturn)
+		allTrades = append(allTrades, sessionTrades...)
+
+		for _, t := range sessionTrades {
+			totalTrades++
+			if t.returns > 0 {
+				totalWins++
+				totalProfit += t.profit
+			} else {
+				totalLoss += math.Abs(t.profit)
 			}
 		}
-		equityCurve = append(equityCurve, equity)
+
+		fmt.Printf("本轮收益: %+.2f%%, 交易: %d 次\n\n", sessionReturn, len(sessionTrades))
 	}
 
-	// 5. 输出结果
-	printResults(closedTrades, equityCurve, cash, initialCapital)
-}
-
-func trainModel(allData []stockKline, trainDays int) (*backtest.GBMRegressor, *backtest.StandardScaler) {
-	var allFeatures [][]float64
-	var allReturns []float64
-
-	for _, sd := range allData {
-		trainKlines := sd.klines[:trainDays+warmupDays]
-		adjusted := backtest.FilterExRights(trainKlines)
-		if len(adjusted) < warmupDays+holdDays+10 {
-			continue
-		}
-		features := backtest.ComputeFeatures(adjusted, warmupDays)
-		if len(features) == 0 {
-			continue
-		}
-		for j := 0; j < len(features) && j+holdDays < len(adjusted)-warmupDays; j++ {
-			idx := warmupDays + j
-			if idx+holdDays >= len(adjusted) {
-				break
-			}
-			ret := (adjusted[idx+holdDays].Close - adjusted[idx].Close) / adjusted[idx].Close
-			if math.Abs(ret) > 0.15 {
-				continue
-			}
-			allFeatures = append(allFeatures, features[j])
-			allReturns = append(allReturns, ret)
-		}
-	}
-
-	if len(allFeatures) < 100 {
-		return nil, nil
-	}
-
-	scaler := &backtest.StandardScaler{}
-	scaler.Fit(allFeatures)
-	normFeatures := scaler.Transform(allFeatures)
-
-	model := backtest.NewGBMRegressor(backtest.GBMConfig{
-		MaxDepth:     4,
-		NEstimators:  200,
-		LearningRate: 0.05,
-		Lambda:       0.5,
-		Gamma:        0.0,
-		ColSample:    0.8,
-		SubSample:    0.8,
-		MinLeafSize:  50,
-	})
-	model.Fit(normFeatures, allReturns)
-
-	return model, scaler
-}
-
-func getKlinesUpToDay(klines []models.KLineData, upTo int) []models.KLineData {
-	if upTo >= len(klines) {
-		return klines
-	}
-	return klines[:upTo]
-}
-
-func getPriceAtDay(allData []stockKline, code string, dayIdx int) float64 {
-	for _, sd := range allData {
-		if sd.code == code && dayIdx < len(sd.klines) {
-			return sd.klines[dayIdx].Close
-		}
-	}
-	return 0
+	// 输出汇总报告
+	printSummary(allTrades, sessionReturns, totalTrades, totalWins, totalProfit, totalLoss)
 }
 
 func getSignal(predReturn, confidence float64) string {
@@ -267,110 +210,27 @@ func getSignal(predReturn, confidence float64) string {
 	}
 }
 
-func printResults(trades []trade, equityCurve []float64, finalCash, initial float64) {
-	fmt.Println()
-	fmt.Println("========================================")
-	fmt.Println("         回测结果报告")
-	fmt.Println("========================================")
-	fmt.Printf("初始资金:   %.0f 元\n", initial)
-	fmt.Printf("最终资金:   %.0f 元\n", finalCash)
-	totalReturn := (finalCash - initial) / initial * 100
-	fmt.Printf("总收益率:   %+.2f%%\n", totalReturn)
-	fmt.Printf("总盈亏:     %+.0f 元\n", finalCash-initial)
-	fmt.Println()
-
-	// 交易统计
-	winCount := 0
-	lossCount := 0
-	totalProfit := 0.0
-	totalLoss := 0.0
-	maxWin := 0.0
-	maxLoss := 0.0
-	winStreak := 0
-	maxWinStreak := 0
-
-	for _, t := range trades {
-		if t.returns > 0 {
-			winCount++
-			totalProfit += t.profit
-			if t.returns > maxWin {
-				maxWin = t.returns
-			}
-			winStreak++
-			if winStreak > maxWinStreak {
-				maxWinStreak = winStreak
-			}
-		} else {
-			lossCount++
-			totalLoss += math.Abs(t.profit)
-			if t.returns < maxLoss {
-				maxLoss = t.returns
-			}
-			winStreak = 0
-		}
+func loadModel(path string) (*backtest.GBMRegressor, *backtest.StandardScaler) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil
 	}
-
-	fmt.Printf("交易次数:   %d 次 (赢%d / 亏%d)\n", len(trades), winCount, lossCount)
-	winRate := 0.0
-	if len(trades) > 0 {
-		winRate = float64(winCount) / float64(len(trades)) * 100
+	var pf struct {
+		Model  *backtest.GBMRegressorSnapshot `json:"model"`
+		Scaler *backtest.ScalerSnapshot       `json:"scaler"`
 	}
-	fmt.Printf("胜率:       %.1f%%\n", winRate)
-
-	pf := 0.0
-	if totalLoss > 0 {
-		pf = totalProfit / totalLoss
+	if err := json.Unmarshal(data, &pf); err != nil {
+		return nil, nil
 	}
-	fmt.Printf("盈亏比:     %.2f\n", pf)
-	fmt.Printf("最大单笔赢: %+.2f%%\n", maxWin*100)
-	fmt.Printf("最大单笔亏: %+.2f%%\n", maxLoss*100)
-	fmt.Printf("最大连胜:   %d 次\n", maxWinStreak)
-	fmt.Println()
-
-	// 每笔交易明细
-	fmt.Println("--- 交易明细 ---")
-	fmt.Printf("%-4s %-8s %-12s %8s %8s %8s %12s %6s\n",
-		"序号", "股票", "信号", "买入价", "卖出价", "收益率", "盈亏", "天数")
-	fmt.Println("---------------------------------------------------------------------------")
-	for i, t := range trades {
-		fmt.Printf("%-4d %-8s %-12s %8.2f %8.2f %+.2f%% %+.0f %d天\n",
-			i+1, t.stockName, t.signal, t.buyPrice, t.sellPrice,
-			t.returns*100, t.profit, t.sellDay-t.buyDay)
-	}
-	fmt.Println()
-
-	// 权益曲线统计
-	if len(equityCurve) > 0 {
-		peak := equityCurve[0]
-		maxDD := 0.0
-		for _, e := range equityCurve {
-			if e > peak {
-				peak = e
-			}
-			dd := (peak - e) / peak
-			if dd > maxDD {
-				maxDD = dd
-			}
-		}
-		fmt.Printf("最大回撤:   %.2f%%\n", maxDD*100)
-	}
-
-	// 年化收益（假设250交易日/年）
-	if len(equityCurve) > 0 {
-		annualized := totalReturn / float64(len(equityCurve)) * 250
-		fmt.Printf("年化收益:   %.2f%% (按%d天推算)\n", annualized, len(equityCurve))
-	}
+	model := &backtest.GBMRegressor{}
+	model.LoadSnapshot(pf.Model)
+	scaler := &backtest.StandardScaler{}
+	scaler.LoadSnapshot(pf.Scaler)
+	return model, scaler
 }
 
-func loadStocks() []struct {
-	Symbol string
-	Name   string
-} {
-	// 使用与训练相同的大市值股票池
-	codes := []struct {
-		Symbol string
-		Name   string
-	}{
+func loadAllStocks() []struct{ Symbol, Name string } {
+	return []struct{ Symbol, Name string }{
 		{"sh600519", "贵州茅台"}, {"sh601318", "中国平安"}, {"sz000858", "五粮液"},
 		{"sh600036", "招商银行"}, {"sz000001", "平安银行"}, {"sh600276", "恒瑞医药"},
 		{"sh601012", "隆基绿能"}, {"sz002714", "牧原股份"}, {"sh600887", "伊利股份"},
@@ -389,9 +249,91 @@ func loadStocks() []struct {
 		{"sz002142", "宁波银行"}, {"sh601225", "陕西煤业"}, {"sz000338", "潍柴动力"},
 		{"sh600010", "包钢股份"}, {"sz002601", "龙蟒佰利"},
 	}
-	return codes
 }
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
+func printSummary(trades []trade, sessionReturns []float64, totalTrades, totalWins int, totalProfit, totalLoss float64) {
+	fmt.Println("========================================")
+	fmt.Println("        汇总报告（随机选股）")
+	fmt.Println("========================================")
+
+	// 本轮统计
+	winSessions := 0
+	lossSessions := 0
+	for _, r := range sessionReturns {
+		if r > 0 {
+			winSessions++
+		} else {
+			lossSessions++
+		}
+	}
+
+	totalReturn := 0.0
+	for _, r := range sessionReturns {
+		totalReturn += r
+	}
+	avgReturn := totalReturn / float64(len(sessionReturns))
+
+	fmt.Printf("模拟轮数:   %d 轮 (赢%d / 亏%d)\n", len(sessionReturns), winSessions, lossSessions)
+	fmt.Printf("平均每轮收益: %+.2f%%\n", avgReturn)
+	fmt.Printf("累计收益:   %+.2f%%\n", totalReturn)
+	fmt.Println()
+
+	// 交易统计
+	winRate := 0.0
+	if totalTrades > 0 {
+		winRate = float64(totalWins) / float64(totalTrades) * 100
+	}
+	pf := 0.0
+	if totalLoss > 0 {
+		pf = totalProfit / totalLoss
+	}
+
+	fmt.Printf("总交易次数: %d 次 (赢%d / 亏%d)\n", totalTrades, totalWins, totalTrades-totalWins)
+	fmt.Printf("胜率:       %.1f%%\n", winRate)
+	fmt.Printf("盈亏比:     %.2f\n", pf)
+	fmt.Println()
+
+	// 交易明细
+	fmt.Println("--- 交易明细 ---")
+	fmt.Printf("%-4s %-4s %-10s %-8s %8s %8s %8s %12s\n",
+		"序号", "轮", "股票", "信号", "买入价", "卖出价", "收益率", "盈亏")
+	fmt.Println("------------------------------------------------------------------------")
+	for i, t := range trades {
+		fmt.Printf("%-4d %-4d %-10s %-8s %8.2f %8.2f %+.2f%% %+.0f\n",
+			i+1, t.sessionID, t.stockName, t.signal, t.buyPrice, t.sellPrice,
+			t.returns*100, t.profit)
+	}
+
+	// 每轮收益
+	fmt.Println()
+	fmt.Println("--- 每轮收益 ---")
+	for i, r := range sessionReturns {
+		icon := "✅"
+		if r < 0 {
+			icon = "❌"
+		}
+		fmt.Printf("  第%2d轮: %s %+.2f%%\n", i+1, icon, r)
+	}
+
+	// 汇总
+	fmt.Println()
+	totalPnL := totalProfit - totalLoss
+	fmt.Printf("总盈亏:     %+.0f 元\n", totalPnL)
+	fmt.Printf("每轮平均:   %+.0f 元\n", totalPnL/float64(len(sessionReturns)))
+
+	// 最大回撤（按轮）
+	peak := 0.0
+	maxDD := 0.0
+	cumReturn := 0.0
+	for _, r := range sessionReturns {
+		cumReturn += r
+		if cumReturn > peak {
+			peak = cumReturn
+		}
+		dd := peak - cumReturn
+		if dd > maxDD {
+			maxDD = dd
+		}
+	}
+	fmt.Printf("最大回撤:   %.2f%%\n", maxDD)
 }

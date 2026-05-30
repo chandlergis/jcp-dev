@@ -210,6 +210,10 @@ export function GetStockMoves(arg1, arg2, arg3) {
   return window['go']['main']['App']['GetStockMoves'](arg1, arg2, arg3);
 }
 
+export function GetStockPrediction(arg1) {
+  return window['go']['main']['App']['GetStockPrediction'](arg1);
+}
+
 export function GetStockRealTimeData(arg1) {
   return window['go']['main']['App']['GetStockRealTimeData'](arg1);
 }

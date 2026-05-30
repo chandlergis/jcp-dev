@@ -1,6 +1,6 @@
 // 市场数据服务 - 调用后端API
-import { GetStockRealTimeData, GetKLineData, GetOrderBook, SearchStocks } from '@wailsjs/go/main/App';
-import type { Stock, KLineData, OrderBook } from '../types';
+import { GetStockRealTimeData, GetKLineData, GetOrderBook, SearchStocks, GetStockPrediction } from '@wailsjs/go/main/App';
+import type { Stock, KLineData, OrderBook, PredictionResult } from '../types';
 
 // 股票搜索结果类型
 export interface StockSearchResult {
@@ -27,4 +27,14 @@ export const getOrderBook = async (code: string): Promise<OrderBook> => {
 export const searchStocks = async (keyword: string): Promise<StockSearchResult[]> => {
   if (!keyword.trim()) return [];
   return await SearchStocks(keyword) as StockSearchResult[];
+};
+
+// 获取单支股票AI预测
+export const getStockPrediction = async (symbol: string): Promise<PredictionResult | null> => {
+  try {
+    const result = await GetStockPrediction(symbol);
+    return result as PredictionResult | null;
+  } catch (err) {
+    return null;
+  }
 };

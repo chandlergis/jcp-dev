@@ -111,6 +111,8 @@ export function GetSessionMessages(arg1:string):Promise<Array<models.ChatMessage
 
 export function GetStockMoves(arg1:string,arg2:number,arg3:number):Promise<models.StockMoveList>;
 
+export function GetStockPrediction(arg1:string):Promise<models.PredictionResult>;
+
 export function GetStockRealTimeData(arg1:Array<string>):Promise<Array<models.Stock>>;
 
 export function GetStrategies():Promise<Array<models.Strategy>>;
@@ -124,6 +126,8 @@ export function GetTradingSchedule():Promise<services.TradingSchedule>;
 export function GetTrainingCapitalCurve(arg1:string):Promise<Array<models.CapitalSnapshot>>;
 
 export function GetTrainingKlines(arg1:string):Promise<Array<models.KLineData>>;
+
+export function GetTrainingPrediction(arg1:string):Promise<models.PredictionResult>;
 
 export function GetTrainingRecords():Promise<Array<models.TrainingRecord>>;
 

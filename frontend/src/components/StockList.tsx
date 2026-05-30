@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Stock, MarketIndex } from '../types';
-import { searchStocks, StockSearchResult } from '../services/stockService';
-import { TrendingUp, TrendingDown, Search, X, List, Filter, History } from 'lucide-react';
+import { Stock, MarketIndex, PredictionResult } from '../types';
+import { searchStocks, StockSearchResult, getStockPrediction } from '../services/stockService';
+import { TrendingUp, TrendingDown, Search, X, List, Filter, History, Sparkles } from 'lucide-react';
 import { MarketIndices } from './MarketIndices';
 import { SelectorPanel } from './SelectorPanel';
 import { SelectorRecordDialog } from './SelectorRecordDialog';
@@ -37,6 +37,9 @@ export const StockList: React.FC<StockListProps> = ({
   const [showDropdown, setShowDropdown] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [showRecordDialog, setShowRecordDialog] = useState(false);
+  const [predSymbol, setPredSymbol] = useState<string | null>(null);
+  const [predResult, setPredResult] = useState<PredictionResult | null>(null);
+  const [predLoading, setPredLoading] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
@@ -101,6 +104,23 @@ export const StockList: React.FC<StockListProps> = ({
     onAddStock(newStock);
     setSearchTerm('');
     setShowDropdown(false);
+  };
+
+  // AI 预测
+  const handlePredict = async (e: React.MouseEvent, symbol: string) => {
+    e.stopPropagation();
+    if (predSymbol === symbol) {
+      // 点击同一支股票，关闭预测
+      setPredSymbol(null);
+      setPredResult(null);
+      return;
+    }
+    setPredSymbol(symbol);
+    setPredLoading(true);
+    setPredResult(null);
+    const result = await getStockPrediction(symbol);
+    setPredResult(result);
+    setPredLoading(false);
   };
 
   const tabs = [
@@ -200,6 +220,17 @@ export const StockList: React.FC<StockListProps> = ({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className={`font-bold ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>{stock.name}</span>
+                        <button
+                          onClick={(e) => handlePredict(e, stock.symbol)}
+                          className={`p-0.5 rounded transition-all ${
+                            predSymbol === stock.symbol
+                              ? 'text-amber-400 bg-amber-500/20'
+                              : `opacity-0 group-hover:opacity-100 ${colors.isDark ? 'text-slate-500 hover:text-amber-400 hover:bg-amber-500/10' : 'text-slate-400 hover:text-amber-500 hover:bg-amber-100'}`
+                          }`}
+                          title="AI 预测"
+                        >
+                          <Sparkles size={14} />
+                        </button>
                         {onRemoveStock && (
                           <button
                             onClick={(e) => {
@@ -230,6 +261,58 @@ export const StockList: React.FC<StockListProps> = ({
                       <span className={`fin-chip px-1.5 py-0.5 rounded ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>{stock.sector}</span>
                     )}
                   </div>
+
+                  {/* AI 预测结果 */}
+                  {predSymbol === stock.symbol && (
+                    <div className="mt-2" onClick={e => e.stopPropagation()}>
+                      {predLoading ? (
+                        <div className={`flex items-center gap-2 text-xs ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                          <div className="h-3 w-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                          AI 分析中...
+                        </div>
+                      ) : predResult ? (
+                        <div className={`p-2 rounded-lg border ${
+                          predResult.signal === '强买入' || predResult.signal === '买入'
+                            ? 'bg-green-500/10 border-green-500/30'
+                            : predResult.signal === '强卖出' || predResult.signal === '卖出'
+                              ? 'bg-red-500/10 border-red-500/30'
+                              : 'bg-slate-500/10 border-slate-500/30'
+                        }`}>
+                          <div className="flex items-center justify-between">
+                            <span className={`text-xs font-bold ${
+                              predResult.signal === '强买入' || predResult.signal === '买入'
+                                ? 'text-green-500'
+                                : predResult.signal === '强卖出' || predResult.signal === '卖出'
+                                  ? 'text-red-500'
+                                  : 'text-slate-400'
+                            }`}>
+                              {predResult.signal}
+                            </span>
+                            <span className={`text-xs font-mono ${predResult.direction === '涨' ? 'text-green-500' : 'text-red-500'}`}>
+                              {predResult.direction} {Math.abs(predResult.return).toFixed(2)}%
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <div className={`flex-1 h-1 rounded-full overflow-hidden ${colors.isDark ? 'bg-slate-700' : 'bg-slate-200'}`}>
+                              <div
+                                className={`h-full rounded-full ${
+                                  predResult.confidence > 0.5 ? 'bg-green-500' : predResult.confidence > 0.3 ? 'bg-yellow-500' : 'bg-slate-400'
+                                }`}
+                                style={{ width: `${Math.min(predResult.confidence * 100, 100)}%` }}
+                              />
+                            </div>
+                            <span className={`text-[10px] ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                              {(predResult.confidence * 100).toFixed(0)}%
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className={`text-xs ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                          预测不可用
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -1836,6 +1836,14 @@ func (a *App) GetSelectorCacheStats() map[string]int {
 	return map[string]int{"total": total, "today": today}
 }
 
+// GetStockPrediction 获取单支股票的AI预测
+func (a *App) GetStockPrediction(symbol string) *models.PredictionResult {
+	if a.selectorService == nil {
+		return nil
+	}
+	return a.selectorService.GetStockPrediction(symbol)
+}
+
 // ========== Training API ==========
 
 // CreateTrainingSession 创建训练会话

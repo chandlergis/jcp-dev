@@ -1557,6 +1557,24 @@ export namespace models {
 	}
 	
 	
+	export class PredictionResult {
+	    direction: string;
+	    return: number;
+	    confidence: number;
+	    signal: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PredictionResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.direction = source["direction"];
+	        this.return = source["return"];
+	        this.confidence = source["confidence"];
+	        this.signal = source["signal"];
+	    }
+	}
 	
 	
 	export class SelectorFilterParams {

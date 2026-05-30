@@ -331,6 +331,20 @@ func (s *SelectorService) GetPredictionService() *PredictionService {
 	return s.predictor
 }
 
+// GetStockPrediction 获取单支股票的AI预测
+func (s *SelectorService) GetStockPrediction(symbol string) *models.PredictionResult {
+	if s.predictor == nil || !s.predictor.IsTrained() {
+		return nil
+	}
+
+	klines, err := s.marketSvc.GetKLineData(symbol, "1d", 250)
+	if err != nil || len(klines) < 60 {
+		return nil
+	}
+
+	return s.predictor.Predict(klines)
+}
+
 // getTrainStockCodes 从候选股票中选取训练用的股票代码
 func (s *SelectorService) getTrainStockCodes(stocks []selector.StockBasicInfo, maxCount int) []string {
 	if len(stocks) <= maxCount {

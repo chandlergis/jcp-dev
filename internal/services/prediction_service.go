@@ -14,18 +14,23 @@ import (
 
 var predLog = logger.New("prediction")
 
-// PredictionService 股价涨跌预测服务
+// PredictionService 股价涨跌预测服务（GBM + LSTM 双模型）
 type PredictionService struct {
 	mu          sync.RWMutex
+	// GBM 模型（保留原有）
 	model       *backtest.GBMRegressor
 	scaler      *backtest.StandardScaler
+	// LSTM 模型
+	lstm        *backtest.LSTMModel
+	// 状态
 	isTrained    bool
 	trainStocks  int
 	trainSamples int
-	modelPath    string // 模型文件路径
+	modelPath    string // GBM 模型文件路径
+	lstmPath     string // LSTM 模型文件路径
 }
 
-// predictionFile 模型持久化文件结构
+// predictionFile GBM模型持久化文件结构
 type predictionFile struct {
 	Model  *backtest.GBMRegressorSnapshot `json:"model"`
 	Scaler *backtest.ScalerSnapshot       `json:"scaler"`
@@ -33,33 +38,44 @@ type predictionFile struct {
 	Samples int                            `json:"samples"`
 }
 
+// predictionLSTMFile LSTM模型持久化文件结构
+type predictionLSTMFile struct {
+	Model  *backtest.LSTMSnapshot `json:"model"`
+	Stocks int                    `json:"stocks"`
+	Samples int                   `json:"samples"`
+}
+
 // NewPredictionService 创建预测服务
 func NewPredictionService(dataDir string) *PredictionService {
 	return &PredictionService{
 		modelPath: filepath.Join(dataDir, "prediction_model.json"),
+		lstmPath:  filepath.Join(dataDir, "prediction_model_lstm.json"),
 	}
 }
 
 // Init 初始化：尝试从文件加载，失败则后台训练
 func (ps *PredictionService) Init(marketSvc *MarketService) {
-	if ps.LoadFromFile() {
+	gbmLoaded := ps.LoadFromFile()
+	lstmLoaded := ps.LoadLSTMFromFile()
+
+	if gbmLoaded && lstmLoaded {
 		return
 	}
 	// 文件不存在或加载失败，后台训练
 	go ps.trainInBackground(marketSvc)
 }
 
-// LoadFromFile 从文件加载模型
+// LoadFromFile 从文件加载GBM模型
 func (ps *PredictionService) LoadFromFile() bool {
 	data, err := os.ReadFile(ps.modelPath)
 	if err != nil {
-		predLog.Info("模型文件不存在，需要训练: %v", err)
+		predLog.Info("GBM模型文件不存在，需要训练: %v", err)
 		return false
 	}
 
 	var pf predictionFile
 	if err := json.Unmarshal(data, &pf); err != nil {
-		predLog.Warn("模型文件解析失败: %v", err)
+		predLog.Warn("GBM模型文件解析失败: %v", err)
 		return false
 	}
 
@@ -77,14 +93,39 @@ func (ps *PredictionService) LoadFromFile() bool {
 	ps.trainSamples = pf.Samples
 	ps.mu.Unlock()
 
-	predLog.Info("从文件加载预测模型成功: %d支股票, %d样本", pf.Stocks, pf.Samples)
+	predLog.Info("从文件加载GBM模型成功: %d支股票, %d样本", pf.Stocks, pf.Samples)
 	return true
 }
 
-// SaveToFile 保存模型到文件
+// LoadLSTMFromFile 从文件加载LSTM模型
+func (ps *PredictionService) LoadLSTMFromFile() bool {
+	data, err := os.ReadFile(ps.lstmPath)
+	if err != nil {
+		predLog.Info("LSTM模型文件不存在，需要训练")
+		return false
+	}
+
+	var lf predictionLSTMFile
+	if err := json.Unmarshal(data, &lf); err != nil {
+		predLog.Warn("LSTM模型文件解析失败: %v", err)
+		return false
+	}
+
+	lstm := &backtest.LSTMModel{}
+	lstm.LoadSnapshot(lf.Model)
+
+	ps.mu.Lock()
+	ps.lstm = lstm
+	ps.mu.Unlock()
+
+	predLog.Info("从文件加载LSTM模型成功: %d支股票, %d样本", lf.Stocks, lf.Samples)
+	return true
+}
+
+// SaveToFile 保存GBM模型到文件
 func (ps *PredictionService) SaveToFile() error {
 	ps.mu.RLock()
-	if !ps.isTrained {
+	if !ps.isTrained || ps.model == nil {
 		ps.mu.RUnlock()
 		return nil
 	}
@@ -100,12 +141,32 @@ func (ps *PredictionService) SaveToFile() error {
 	if err != nil {
 		return err
 	}
-
-	// 确保目录存在
 	dir := filepath.Dir(ps.modelPath)
 	os.MkdirAll(dir, 0755)
-
 	return os.WriteFile(ps.modelPath, data, 0644)
+}
+
+// SaveLSTMToFile 保存LSTM模型到文件
+func (ps *PredictionService) SaveLSTMToFile() error {
+	ps.mu.RLock()
+	if ps.lstm == nil {
+		ps.mu.RUnlock()
+		return nil
+	}
+	lf := predictionLSTMFile{
+		Model:   ps.lstm.Snapshot(),
+		Stocks:  ps.trainStocks,
+		Samples: ps.trainSamples,
+	}
+	ps.mu.RUnlock()
+
+	data, err := json.Marshal(lf)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(ps.lstmPath)
+	os.MkdirAll(dir, 0755)
+	return os.WriteFile(ps.lstmPath, data, 0644)
 }
 
 // trainInBackground 后台训练模型
@@ -124,16 +185,19 @@ func (ps *PredictionService) trainInBackground(marketSvc *MarketService) {
 
 	// 保存到文件
 	if err := ps.SaveToFile(); err != nil {
-		predLog.Warn("保存模型文件失败: %v", err)
+		predLog.Warn("保存GBM模型文件失败: %v", err)
 	} else {
-		predLog.Info("模型已保存到: %s", ps.modelPath)
+		predLog.Info("GBM模型已保存到: %s", ps.modelPath)
+	}
+	if err := ps.SaveLSTMToFile(); err != nil {
+		predLog.Warn("保存LSTM模型文件失败: %v", err)
+	} else {
+		predLog.Info("LSTM模型已保存到: %s", ps.lstmPath)
 	}
 }
 
 // loadAllStockSymbols 加载所有股票代码
 func loadAllStockSymbols() []string {
-	// 这里复用 embed 包的股票列表
-	// 简单实现：返回一些常见的大市值股票代码
 	return []string{
 		"sh600519", "sh601318", "sz000858", "sh600036", "sz000001",
 		"sh600276", "sh601012", "sz002714", "sh600887", "sz000333",
@@ -160,7 +224,7 @@ func (ps *PredictionService) TrainOnStocks(marketSvc *MarketService, stockCodes 
 	return ps.TrainOnFetcher(marketSvc, stockCodes, days)
 }
 
-// TrainOnFetcher 用数据获取接口训练模型
+// TrainOnFetcher 用数据获取接口训练模型（同时训练GBM和LSTM）
 func (ps *PredictionService) TrainOnFetcher(fetcher interface {
 	GetKLineData(code string, period string, days int) ([]models.KLineData, error)
 }, stockCodes []string, days int) error {
@@ -209,11 +273,14 @@ func (ps *PredictionService) TrainOnFetcher(fetcher interface {
 		return nil
 	}
 
+	// 共享标准化器
 	scaler := &backtest.StandardScaler{}
 	scaler.Fit(allFeatures)
 	normFeatures := scaler.Transform(allFeatures)
 
-	model := backtest.NewGBMRegressor(backtest.GBMConfig{
+	// --- 训练 GBM ---
+	predLog.Info("训练GBM模型...")
+	gbmModel := backtest.NewGBMRegressor(backtest.GBMConfig{
 		MaxDepth:     4,
 		NEstimators:  200,
 		LearningRate: 0.05,
@@ -223,21 +290,34 @@ func (ps *PredictionService) TrainOnFetcher(fetcher interface {
 		SubSample:    0.8,
 		MinLeafSize:  50,
 	})
-	model.Fit(normFeatures, allReturns)
+	gbmModel.Fit(normFeatures, allReturns)
+
+	// --- 训练 LSTM ---
+	predLog.Info("训练LSTM模型...")
+	inputSize := len(allFeatures[0])
+	lstmConfig := backtest.DefaultLSTMConfig(inputSize)
+	lstmConfig.HiddenSize = 32
+	lstmConfig.SeqLen = 10
+	lstmConfig.Epochs = 50
+	lstmConfig.BatchSize = 64
+	lstmConfig.LearningRate = 0.001
+	lstmModel := backtest.NewLSTMModel(lstmConfig)
+	lstmModel.Fit(normFeatures, allReturns)
 
 	ps.mu.Lock()
-	ps.model = model
+	ps.model = gbmModel
 	ps.scaler = scaler
+	ps.lstm = lstmModel
 	ps.isTrained = true
 	ps.trainStocks = trainedStocks
 	ps.trainSamples = len(allFeatures)
 	ps.mu.Unlock()
 
-	predLog.Info("预测模型训练完成: %d支股票, %d样本", trainedStocks, len(allFeatures))
+	predLog.Info("预测模型训练完成: %d支股票, %d样本 (GBM+LSTM)", trainedStocks, len(allFeatures))
 	return nil
 }
 
-// Predict 对单支股票的K线数据进行预测
+// Predict 对单支股票的K线数据进行预测（融合GBM和LSTM）
 func (ps *PredictionService) Predict(klines []models.KLineData) *models.PredictionResult {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
@@ -263,10 +343,27 @@ func (ps *PredictionService) Predict(klines []models.KLineData) *models.Predicti
 
 	lastFeat := features[len(features)-1:]
 	normFeat := ps.scaler.Transform(lastFeat)
-	predReturn := ps.model.Predict(normFeat)[0]
+
+	// GBM 预测
+	gbmPred := ps.model.Predict(normFeat)[0]
+
+	// LSTM 预测（如果有模型且特征足够）
+	lstmPred := 0.0
+	lstmWeight := 0.0
+	if ps.lstm != nil && len(features) >= 10 {
+		lstmResult := ps.lstm.Predict(features)
+		if len(lstmResult) > 0 {
+			lstmPred = lstmResult[0]
+			lstmWeight = 0.4 // LSTM 权重 40%
+		}
+	}
+
+	// 融合预测：GBM 60% + LSTM 40%（如果有LSTM）
+	predReturn := gbmPred*(1-lstmWeight) + lstmPred*lstmWeight
+
 	confidence := math.Min(math.Abs(predReturn)/0.03, 1.0)
 
-	predLog.Debug("预测 %s: 原始值=%.6f, 收益=%.3f%%", "stock", predReturn, predReturn*100)
+	predLog.Debug("预测: GBM=%.6f, LSTM=%.6f, 融合=%.6f", gbmPred, lstmPred, predReturn)
 
 	direction := "跌"
 	if predReturn > 0 {
@@ -296,7 +393,6 @@ func (ps *PredictionService) GetTrainInfo() (stocks int, samples int) {
 }
 
 func getSignal(predReturn float64, confidence float64) string {
-	// predReturn 是小数形式 (0.01 = 1%), 转为百分比值
 	pct := predReturn * 100
 	absPct := math.Abs(pct)
 	switch {

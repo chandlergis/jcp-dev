@@ -331,7 +331,8 @@ func (ps *PredictionService) Predict(klines []models.KLineData) *models.Predicti
 	lastFeat := features[len(features)-1:]
 	normFeat := ps.scaler.Transform(lastFeat)
 	predReturn := ps.model.Predict(normFeat)[0]
-	confidence := math.Min(math.Abs(predReturn)/0.03, 1.0)
+	// 置信度：用 tanh 映射，0.5%预测→0.5置信度，2%→0.9
+	confidence := math.Tanh(math.Abs(predReturn) / 0.005)
 
 	predLog.Debug("预测: GBM=%.6f, 收益=%.3f%%", predReturn, predReturn*100)
 
@@ -364,15 +365,14 @@ func (ps *PredictionService) GetTrainInfo() (stocks int, samples int) {
 
 func getSignal(predReturn float64, confidence float64) string {
 	pct := predReturn * 100
-	absPct := math.Abs(pct)
 	switch {
-	case pct > 0 && absPct > 1.5 && confidence > 0.3:
+	case pct > 0.5 && confidence > 0.5:
 		return "强买入"
-	case pct > 0 && absPct > 0.5:
+	case pct > 0.15:
 		return "买入"
-	case pct < 0 && absPct > 1.5 && confidence > 0.3:
+	case pct < -0.5 && confidence > 0.5:
 		return "强卖出"
-	case pct < 0 && absPct > 0.5:
+	case pct < -0.15:
 		return "卖出"
 	default:
 		return "观望"

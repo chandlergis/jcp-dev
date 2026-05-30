@@ -1,9 +1,9 @@
-import { TrainingSession, TradeRecord, CapitalSnapshot, KLineData, MilestoneInfo, TradeAction, PositionLevel } from '../types';
+import { TrainingSession, TradeRecord, CapitalSnapshot, KLineData, MilestoneInfo, TradeAction, PositionLevel, PredictionResult } from '../types';
 import { 
   CreateTrainingSession, GetTrainingSession, GetTrainingKlines,
   ExecuteTrainingTrade, NextTrainingDay, AbortTraining,
   GetTrainingTrades, GetTrainingCapitalCurve, GetTrainingStats,
-  GetAllMilestones
+  GetAllMilestones, GetTrainingPrediction
 } from '../../wailsjs/go/main/App';
 
 export async function createTrainingSession(): Promise<TrainingSession | null> {
@@ -99,5 +99,14 @@ export async function getAllMilestones(): Promise<MilestoneInfo[]> {
     return (result || []) as MilestoneInfo[];
   } catch (err) {
     return [];
+  }
+}
+
+export async function getTrainingPrediction(sessionId: string): Promise<PredictionResult | null> {
+  try {
+    const result = await GetTrainingPrediction(sessionId);
+    return result as PredictionResult | null;
+  } catch (err) {
+    return null;
   }
 }

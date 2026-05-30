@@ -347,6 +347,13 @@ export interface SelectorStock {
   predSignal?: string;
 }
 
+export interface PredictionResult {
+  direction: string;  // "涨" / "跌"
+  return: number;     // 预测收益率(%)
+  confidence: number; // 置信度 0-1
+  signal: string;     // 信号等级
+}
+
 export interface SelectorFilterParams {
   priceMin: number;
   priceMax: number;

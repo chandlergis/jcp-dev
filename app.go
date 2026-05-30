@@ -165,6 +165,8 @@ func NewApp() *App {
 
 	// 初始化训练服务
 	trainingService := services.NewTrainingService(dataDir, marketService)
+	// 将预测服务注入训练服务（选股服务已训练好模型）
+	trainingService.SetPredictionService(selectorService.GetPredictionService())
 
 	// 初始化Agent容器（直接从StrategyService获取数据）
 	agentContainer := agent.NewContainer()
@@ -1963,4 +1965,12 @@ func (a *App) GetMilestoneInfo(milestoneType models.MilestoneType) *models.Miles
 // GetAllMilestones 获取所有里程碑定义
 func (a *App) GetAllMilestones() []models.MilestoneInfo {
 	return models.GetMilestones()
+}
+
+// GetTrainingPrediction 获取训练会话的AI预测
+func (a *App) GetTrainingPrediction(sessionID string) *models.PredictionResult {
+	if a.trainingService == nil {
+		return nil
+	}
+	return a.trainingService.GetTrainingPrediction(sessionID)
 }

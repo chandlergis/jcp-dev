@@ -238,6 +238,10 @@ export function GetTrainingKlines(arg1) {
   return window['go']['main']['App']['GetTrainingKlines'](arg1);
 }
 
+export function GetTrainingPrediction(arg1) {
+  return window['go']['main']['App']['GetTrainingPrediction'](arg1);
+}
+
 export function GetTrainingRecords() {
   return window['go']['main']['App']['GetTrainingRecords']();
 }

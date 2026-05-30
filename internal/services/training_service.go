@@ -22,6 +22,7 @@ type TrainingService struct {
 	manager      *training.Manager
 	selectorMgr  *selector.Manager
 	marketSvc    *MarketService
+	predictionSvc *PredictionService
 	mu           sync.RWMutex
 	store        *models.TrainingStore
 	config       models.TrainingConfig
@@ -253,4 +254,24 @@ func (s *TrainingService) GetBestRecord() *models.TrainingRecord {
 	}
 
 	return best
+}
+
+// GetTrainingPrediction 获取当前训练会话的AI预测
+func (s *TrainingService) GetTrainingPrediction(sessionID string) *models.PredictionResult {
+	if s.predictionSvc == nil || !s.predictionSvc.IsTrained() {
+		return nil
+	}
+
+	// 获取当前可见的K线数据（包含历史，不含未来）
+	klines := s.manager.GetVisibleKlines(sessionID)
+	if len(klines) < 60 {
+		return nil
+	}
+
+	return s.predictionSvc.Predict(klines)
+}
+
+// SetPredictionService 设置预测服务
+func (s *TrainingService) SetPredictionService(ps *PredictionService) {
+	s.predictionSvc = ps
 }

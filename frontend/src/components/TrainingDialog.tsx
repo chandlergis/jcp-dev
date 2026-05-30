@@ -9,7 +9,9 @@ import { TrainingSession, KLineData, TradeRecord, PositionLevel, MilestoneInfo }
 import {
   createTrainingSession, getTrainingSession, executeTrade, nextDay,
   getTrainingKlines, getStats, abortTraining, getAllMilestones,
+  getTrainingPrediction,
 } from '../services/trainingService';
+import { PredictionResult } from '../types';
 import { useTheme } from '../contexts/ThemeContext';
 
 interface TrainingDialogProps {
@@ -43,6 +45,7 @@ export const TrainingDialog: React.FC<TrainingDialogProps> = ({ isOpen, onClose 
   const [stats, setStats] = useState<Record<string, any> | null>(null);
   const [milestones, setMilestones] = useState<MilestoneInfo[]>([]);
   const [showMilestone, setShowMilestone] = useState<MilestoneInfo | null>(null);
+  const [prediction, setPrediction] = useState<PredictionResult | null>(null);
 
   const klineCacheRef = useRef<KLineData[]>([]);
   const lastLoadedIndexRef = useRef<number>(-1);
@@ -277,6 +280,7 @@ export const TrainingDialog: React.FC<TrainingDialogProps> = ({ isOpen, onClose 
     setFinished(false);
     setStats(null);
     setTrades([]);
+    setPrediction(null);
     try {
       const s = await createTrainingSession();
       if (s) {
@@ -294,6 +298,9 @@ export const TrainingDialog: React.FC<TrainingDialogProps> = ({ isOpen, onClose 
           };
           setTimeout(wait, 100);
         }
+        // 获取AI预测
+        const pred = await getTrainingPrediction(s.id);
+        setPrediction(pred);
       }
     } finally {
       setLoading(false);
@@ -344,8 +351,13 @@ export const TrainingDialog: React.FC<TrainingDialogProps> = ({ isOpen, onClose 
         setSession(s);
         if (s.status === 'finished') {
           setFinished(true);
+          setPrediction(null);
           const st = await getStats(s.id);
           setStats(st);
+        } else {
+          // 获取新一天的AI预测
+          const pred = await getTrainingPrediction(s.id);
+          setPrediction(pred);
         }
       }
     } else {
@@ -353,6 +365,7 @@ export const TrainingDialog: React.FC<TrainingDialogProps> = ({ isOpen, onClose 
       if (s) {
         setSession(s);
         setFinished(true);
+        setPrediction(null);
         const st = await getStats(s.id);
         setStats(st);
       }
@@ -538,6 +551,44 @@ export const TrainingDialog: React.FC<TrainingDialogProps> = ({ isOpen, onClose 
             {/* 交易按钮 */}
             {!finished && (
               <div className="p-3 border-b fin-divider">
+                {/* AI预测提示 */}
+                {prediction && (
+                  <div className={`mb-2 p-2 rounded-lg border ${
+                    prediction.signal === '强买入' || prediction.signal === '买入'
+                      ? 'bg-green-500/10 border-green-500/30'
+                      : prediction.signal === '强卖出' || prediction.signal === '卖出'
+                        ? 'bg-red-500/10 border-red-500/30'
+                        : 'bg-slate-500/10 border-slate-500/30'
+                  }`}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={`text-xs font-bold ${
+                        prediction.signal === '强买入' || prediction.signal === '买入'
+                          ? 'text-green-500'
+                          : prediction.signal === '强卖出' || prediction.signal === '卖出'
+                            ? 'text-red-500'
+                            : 'text-slate-400'
+                      }`}>
+                        AI 预测: {prediction.signal}
+                      </span>
+                      <span className={`text-xs font-mono ${prediction.direction === '涨' ? 'text-green-500' : 'text-red-500'}`}>
+                        {prediction.direction} {Math.abs(prediction.return).toFixed(2)}%
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className={`flex-1 h-1 rounded-full overflow-hidden ${colors.isDark ? 'bg-slate-700' : 'bg-slate-200'}`}>
+                        <div
+                          className={`h-full rounded-full ${
+                            prediction.confidence > 0.5 ? 'bg-green-500' : prediction.confidence > 0.3 ? 'bg-yellow-500' : 'bg-slate-400'
+                          }`}
+                          style={{ width: `${Math.min(prediction.confidence * 100, 100)}%` }}
+                        />
+                      </div>
+                      <span className={`text-[10px] ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                        置信度 {(prediction.confidence * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-1.5 mb-2">
                   {POSITION_OPTIONS.map(opt => (
                     <button 

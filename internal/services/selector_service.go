@@ -326,6 +326,11 @@ func (s *SelectorService) ClearExpiredCache(days int) int {
 	return s.klineCache.ClearExpired(days)
 }
 
+// GetPredictionService 获取预测服务（供训练营使用）
+func (s *SelectorService) GetPredictionService() *PredictionService {
+	return s.predictor
+}
+
 // getTrainStockCodes 从候选股票中选取训练用的股票代码
 func (s *SelectorService) getTrainStockCodes(stocks []selector.StockBasicInfo, maxCount int) []string {
 	if len(stocks) <= maxCount {
